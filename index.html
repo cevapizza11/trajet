@@ -87,7 +87,7 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
 <body>
 <header>
   <h1>Trajet <span>Model 3</span> ⚡</h1>
-  <div class="ver">v.24/09/2026 08:10</div>
+  <div class="ver">v.24/09/2026 08:27</div>
 </header>
 
 <div class="layout">
@@ -192,7 +192,7 @@ function carCurve(p){ return p<30?165 : p<50?120 : p<70?80 : p<80?55 : p<90?35 :
 // Consommation (Wh/km) selon la vitesse moyenne du tronçon
 function whPerKm(v){ v=Math.max(15,Math.min(v,150)); return 72 + 0.00625*v*v + 800/Math.max(v,20); }
 
-const OVERPASS = ['https://overpass-api.de/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://overpass.private.coffee/api/interpreter'];
+const OVERPASS = ['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
 const OSRM = 'https://router.project-osrm.org/route/v1/driving/';
 
 /* ================== OUTILS ================== */
@@ -227,10 +227,11 @@ SAVE_IDS.forEach(id=>$('#'+id).addEventListener('change',saveSettings));
 
 /* ================== CARTE ================== */
 const map = L.map('map',{zoomControl:true}).setView([43.18,3.0],8);
-const light = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{maxZoom:19,attribution:'© OpenStreetMap © CARTO'});
-const dark  = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,attribution:'© OpenStreetMap © CARTO'});
+const light = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles © Esri — © OpenStreetMap'});
+const osm   = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'});
+const dark  = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',{maxZoom:16,attribution:'Tiles © Esri'});
 light.addTo(map);
-L.control.layers({'Carte claire':light,'Carte sombre':dark},null,{position:'topright'}).addTo(map);
+L.control.layers({'Carte routière':light,'OpenStreetMap':osm,'Carte sombre':dark},null,{position:'topright'}).addTo(map);
 const layers = { route:L.layerGroup().addTo(map), chargers:L.layerGroup().addTo(map), pins:L.layerGroup().addTo(map) };
 
 /* ================== GÉOCODAGE ================== */
@@ -305,16 +306,30 @@ function legEnergy(leg){
 
 /* ================== BORNES (OpenStreetMap / Overpass) ================== */
 async function fetchChargers(prof,radiusKm){
-  const pts=[]; let last=-1e12; const {coords,D}=prof;
-  for(let i=0;i<coords.length;i++){ if(D[i]-last>=2000||i===coords.length-1){ pts.push(coords[i][1].toFixed(4)+','+coords[i][0].toFixed(4)); last=D[i]; } }
-  const q=`[out:json][timeout:90];nwr["amenity"="charging_station"][~"^(operator|brand|name|network)$"~"tesla|power ?dot",i](around:${radiusKm*1000},${pts.join(',')});out center tags;`;
+  // Découpe la route en tronçons de ~60 km -> une petite zone rectangulaire par tronçon (requête rapide)
+  const {coords,D}=prof, mLat=radiusKm/111+0.01, boxes=[]; let s=0;
+  while(s<coords.length-1){
+    let e=s; while(e<coords.length-1&&D[e]-D[s]<60000) e++;
+    let a=90,b=180,c=-90,d=-180;
+    for(let i=s;i<=e;i++){ const lo=coords[i][0], la=coords[i][1]; if(la<a)a=la; if(la>c)c=la; if(lo<b)b=lo; if(lo>d)d=lo; }
+    const mLon=mLat/Math.cos((a+c)/2*Math.PI/180);
+    boxes.push(`${(a-mLat).toFixed(3)},${(b-mLon).toFixed(3)},${(c+mLat).toFixed(3)},${(d+mLon).toFixed(3)}`);
+    s=e;
+  }
+  const parts=boxes.map(bb=>['operator','brand','network','name'].map(k=>`nwr["amenity"="charging_station"]["${k}"~"tesla|power ?dot",i](${bb});`).join('')).join('');
+  const q=`[out:json][timeout:60];(${parts});out center tags;`;
   let lastErr;
   for(const ep of OVERPASS){
+    const ctl=new AbortController(), tm=setTimeout(()=>ctl.abort(),30000); // 30 s max par serveur
     try{
-      const r=await fetch(ep,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'data='+encodeURIComponent(q)});
+      setStatus('Recherche des bornes Tesla et Powerdot… ('+new URL(ep).host+')');
+      const r=await fetch(ep,{method:'POST',body:new URLSearchParams({data:q}),signal:ctl.signal});
+      clearTimeout(tm);
       if(!r.ok){ lastErr=new Error('HTTP '+r.status); continue; }
-      const j=await r.json(); return j.elements||[];
-    }catch(e){ lastErr=e; }
+      const j=await r.json();
+      if(j.remark&&!(j.elements||[]).length){ lastErr=new Error(j.remark); continue; }
+      return j.elements||[];
+    }catch(e){ clearTimeout(tm); lastErr=e; }
   }
   throw lastErr||new Error('Serveur des bornes indisponible');
 }
@@ -420,10 +435,11 @@ $('#go').onclick=async()=>{
     setStatus('Recherche des bornes Tesla et Powerdot le long du trajet…');
     let raw=[];
     try{ raw=await fetchChargers(state.prof,+$('#radius').value); }
-    catch(e){ state.planError='Le serveur des bornes ne répond pas (souvent surchargé). Réessaie dans une minute.'; }
+    catch(e){ state.planError='Les serveurs des bornes ne répondent pas ('+(e.name==='AbortError'?'délai dépassé':e.message)+'). Réessaie dans une minute.'; }
     const ops={tesla:$('#opTesla').checked,powerdot:$('#opPd').checked};
     state.chargers=dedupe(raw.map(parseCharger).filter(c=>c&&ops[c.op]));
     state.chargers.forEach(c=>project(c,state.prof));
+    state.chargers=state.chargers.filter(c=>c.off<=+$('#radius').value);
     state.chargers.sort((a,b)=>a.km-b.km);
     if($('#auto').checked&&state.chargers.length){
       const p=autoPlan(state.prof,state.chargers,settings()); state.stops=p.stops; if(p.error) state.planError=p.error;
