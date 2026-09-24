@@ -80,6 +80,7 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
 .stopicon{width:28px;height:28px;border-radius:50%;background:var(--stop);color:#111;font-weight:800;display:flex;align-items:center;justify-content:center;border:2px solid #111;box-shadow:0 1px 4px rgba(0,0,0,.6)}
 .pinA,.pinB{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;border:2px solid #fff}
 .pinA{background:var(--ok)}.pinB{background:var(--acc)}
+.pinV{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;border:2px solid #fff;background:#9b6bff}
 .foot{font-size:11px;color:var(--mut);line-height:1.5}
 .hide{display:none!important}
 </style>
@@ -87,7 +88,7 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
 <body>
 <header>
   <h1>Trajet <span>Model 3</span> ⚡</h1>
-  <div class="ver">v.24/09/2026 08:27</div>
+  <div class="ver">v.24/09/2026 08:38</div>
 </header>
 
 <div class="layout">
@@ -102,6 +103,8 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
         </div>
         <ul class="sugg" id="from-s"></ul>
       </div>
+      <div id="vias"></div>
+      <button class="btn2" id="addVia" style="margin:0 0 10px">＋ Ajouter une étape (passer par…)</button>
       <div class="field">
         <label for="to">Arrivée</label>
         <div class="row">
@@ -117,6 +120,7 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
       </div>
 
       <label class="chk"><input type="checkbox" id="auto" checked> Proposer automatiquement les arrêts recharge</label>
+      <label class="chk"><input type="checkbox" id="noToll"> Éviter les péages</label>
     </div>
 
     <div class="card">
@@ -193,11 +197,11 @@ function carCurve(p){ return p<30?165 : p<50?120 : p<70?80 : p<80?55 : p<90?35 :
 function whPerKm(v){ v=Math.max(15,Math.min(v,150)); return 72 + 0.00625*v*v + 800/Math.max(v,20); }
 
 const OVERPASS = ['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
-const OSRM = 'https://router.project-osrm.org/route/v1/driving/';
+const OSRM_SERVERS = ['https://router.project-osrm.org/route/v1/driving/','https://routing.openstreetmap.de/routed-car/route/v1/driving/'];
 
 /* ================== OUTILS ================== */
 const $ = s => document.querySelector(s);
-const state = { from:null, to:null, base:null, prof:null, chargers:[], stops:[], route:null, sim:null, planError:null };
+const state = { from:null, to:null, base:null, prof:null, chargers:[], stops:[], route:null, sim:null, planError:null, viaIds:[], vias:[], points:[], alt:null };
 function hav(a,b){ // a,b = [lon,lat] -> mètres
   const R=6371000, toR=Math.PI/180, dLat=(b[1]-a[1])*toR, dLon=(b[0]-a[0])*toR;
   const x=Math.sin(dLat/2)**2+Math.cos(a[1]*toR)*Math.cos(b[1]*toR)*Math.sin(dLon/2)**2;
@@ -211,7 +215,7 @@ function settings(){ return { soc:+$('#soc').value, resCh:+$('#resCh').value, re
 function pctClass(p,min){ return p<0?'bad' : p<min?'warn' : 'ok'; }
 
 /* ================== RÉGLAGES MÉMORISÉS ================== */
-const SAVE_IDS=['soc','resCh','resDest','maxT','adj','cond','radius','auto','opTesla','opPd'];
+const SAVE_IDS=['soc','resCh','resDest','maxT','adj','cond','radius','auto','opTesla','opPd','noToll'];
 function saveSettings(){ try{ const o={}; SAVE_IDS.forEach(id=>{const el=$('#'+id); o[id]=el.type==='checkbox'?el.checked:el.value;}); localStorage.setItem('trajetM3',JSON.stringify(o)); }catch(e){} }
 function loadSettings(){ try{ const o=JSON.parse(localStorage.getItem('trajetM3')||'{}'); SAVE_IDS.forEach(id=>{ if(o[id]===undefined) return; const el=$('#'+id); if(el.type==='checkbox') el.checked=o[id]; else el.value=o[id]; }); }catch(e){} }
 function refreshLabels(){
@@ -261,6 +265,17 @@ function setupAuto(key){
   inp.addEventListener('blur',()=>setTimeout(()=>list.style.display='none',200));
 }
 setupAuto('from'); setupAuto('to');
+/* ---- Étapes intermédiaires ("passer par…") ---- */
+let viaSeq=0;
+function addVia(){
+  const id='via'+(++viaSeq); state.viaIds.push(id);
+  const div=document.createElement('div'); div.className='field';
+  div.innerHTML=`<label for="${id}">Étape (passer par)</label><div class="row"><input type="text" id="${id}" placeholder="Ville ou adresse" autocomplete="off"><button class="ib" title="Supprimer l'étape">✕</button></div><ul class="sugg" id="${id}-s"></ul>`;
+  $('#vias').appendChild(div); setupAuto(id);
+  div.querySelector('button').onclick=()=>{ div.remove(); state.viaIds=state.viaIds.filter(x=>x!==id); delete state[id]; };
+  $('#'+id).focus();
+}
+$('#addVia').onclick=addVia;
 $('#gps').onclick=()=>{
   if(!navigator.geolocation){ setStatus('Géolocalisation indisponible',true); return; }
   setStatus('Recherche de ta position…');
@@ -277,13 +292,20 @@ async function ensurePlace(key){
 }
 
 /* ================== ITINÉRAIRE (OSRM) ================== */
-async function osrm(points){
+async function osrm(points,noToll){
+  if(noToll===undefined) noToll=$('#noToll').checked;
   const c=points.map(p=>(+p.lon).toFixed(6)+','+(+p.lat).toFixed(6)).join(';');
-  const r=await fetch(`${OSRM}${c}?overview=full&geometries=geojson&annotations=distance,duration&steps=false`);
-  if(!r.ok) throw new Error('Serveur d’itinéraire indisponible ('+r.status+'), réessaie dans un instant');
-  const j=await r.json();
-  if(j.code!=='Ok'||!j.routes||!j.routes.length) throw new Error('Aucun itinéraire trouvé');
-  return j.routes[0];
+  const q=`?overview=full&geometries=geojson&annotations=distance,duration&steps=false${noToll?'&exclude=toll':''}`;
+  let lastErr;
+  for(const base of OSRM_SERVERS){
+    try{
+      const r=await fetch(base+c+q); const j=await r.json().catch(()=>({}));
+      if(r.ok&&j.code==='Ok'&&j.routes&&j.routes.length) return j.routes[0];
+      if(j.code==='NoRoute'){ lastErr=new Error('Aucun itinéraire trouvé'+(noToll?' sans péage':'')); break; }
+      lastErr=new Error((noToll?'Calcul sans péage impossible':'Serveur d’itinéraire indisponible')+' ('+(j.message||j.code||r.status)+')');
+    }catch(e){ lastErr=new Error('Serveur d’itinéraire injoignable, réessaie dans un instant'); }
+  }
+  throw lastErr;
 }
 function flatAnn(route){ let d=[],t=[]; route.legs.forEach(l=>{ if(l.annotation&&l.annotation.distance){ d=d.concat(l.annotation.distance); t=t.concat(l.annotation.duration); } }); return {d,t}; }
 // Profil cumulé distance / énergie le long de la route de base
@@ -394,22 +416,30 @@ function chargeMinutes(from,to,kw){
   for(let p=Math.max(0,from);p<to;p+=step){ const eff=Math.min(kw*0.92,carCurve(p)); m+=(CAR.usable*step/100)/eff*60; }
   return m+2; // + branchement
 }
-function simulate(route,stops,s){
-  const cap=CAR.usable, legs=route.legs, out=[], warns=[]; let soc=s.soc, chargeMin=0;
+// pts = points intermédiaires dans l'ordre (étapes "via" + bornes de recharge)
+function simulate(route,pts,s){
+  const cap=CAR.usable, legs=route.legs, out=[], warns=[]; let soc=s.soc, chargeMin=0, no=0;
   const legE=legs.map(legEnergy);
   legs.forEach((leg,i)=>{
-    const used=legE[i]/cap*100, arrive=soc-used, isStop=i<stops.length;
+    const used=legE[i]/cap*100, arrive=soc-used, p=pts[i];
     const step={legKm:leg.distance/1000,legMin:leg.duration/60,used,arrive};
-    if(isStop){
-      const st=stops[i], nextReserve=(i+1<stops.length)?s.resCh:s.resDest;
-      const need=legE[i+1]/cap*100+nextReserve;
+    if(p&&p.type==='via'){
+      step.via=p;
+      if(arrive<0) warns.push({lvl:'bad',t:`Batterie vide avant l'étape ${p.name} : ajoute un arrêt recharge.`});
+      soc=arrive;
+    }else if(p){
+      const st=p; no++;
+      // énergie jusqu'à la prochaine recharge (ou la destination), en traversant les étapes
+      let j=i+1, e=legE[j]; while(pts[j]&&pts[j].type==='via'){ j++; e+=legE[j]; }
+      const nextReserve=pts[j]?s.resCh:s.resDest;
+      const need=e/cap*100+nextReserve;
       let target=Math.min(s.maxT,Math.ceil((need+1)/5)*5);
-      if(need>s.maxT) warns.push({lvl:'warn',t:`Arrêt ${i+1} (${st.name}) : même chargée à ${s.maxT} %, tu n'arrives pas à l'étape suivante avec ta réserve. Augmente « Recharger au maximum » ou ajoute un arrêt.`});
+      if(need>s.maxT) warns.push({lvl:'warn',t:`Arrêt ${no} (${st.name}) : même chargée à ${s.maxT} %, tu n'arrives pas à la recharge suivante avec ta réserve. Augmente « Recharger au maximum » ou ajoute un arrêt.`});
       if(target<=arrive) target=arrive;
       const mins=chargeMinutes(Math.max(arrive,0),target,st.kw);
-      chargeMin+=mins; Object.assign(step,{stop:st,target,mins});
-      if(arrive<0) warns.push({lvl:'bad',t:`Tu n'atteins pas l'arrêt ${i+1} (${st.name}) : batterie vide avant.`});
-      else if(arrive<s.resCh) warns.push({lvl:'warn',t:`Arrivée à ${Math.round(arrive)} % à l'arrêt ${i+1}, sous ta réserve de ${s.resCh} %.`});
+      chargeMin+=mins; Object.assign(step,{stop:st,no,target,mins});
+      if(arrive<0) warns.push({lvl:'bad',t:`Tu n'atteins pas l'arrêt ${no} (${st.name}) : batterie vide avant.`});
+      else if(arrive<s.resCh) warns.push({lvl:'warn',t:`Arrivée à ${Math.round(arrive)} % à l'arrêt ${no}, sous ta réserve de ${s.resCh} %.`});
       soc=target;
     }else{
       if(arrive<0) warns.push({lvl:'bad',t:'Batterie insuffisante pour arriver à destination : ajoute un arrêt recharge.'});
@@ -426,10 +456,18 @@ $('#go').onclick=async()=>{
   if(busy) return; busy=true; $('#go').disabled=true;
   try{
     setStatus('Recherche des adresses…');
-    await ensurePlace('from'); await ensurePlace('to');
-    setStatus('Calcul de l’itinéraire…');
-    state.base=await osrm([state.from,state.to]);
+    await ensurePlace('from');
+    for(const id of state.viaIds) if($('#'+id)&&$('#'+id).value.trim()) await ensurePlace(id);
+    await ensurePlace('to');
+    state.vias=state.viaIds.filter(id=>state[id]&&$('#'+id)&&$('#'+id).value.trim()).map(id=>({...state[id],type:'via',id:'v-'+id,name:state[id].label.split(',')[0]}));
+    const noToll=$('#noToll').checked; state.noToll=noToll;
+    setStatus(noToll?'Calcul de l’itinéraire sans péage…':'Calcul de l’itinéraire…');
+    state.base=await osrm([state.from,...state.vias,state.to],noToll);
     state.prof=buildProfile(state.base);
+    state.vias.forEach(v=>project(v,state.prof));
+    // comparaison avec / sans péage
+    state.alt=null;
+    try{ const r=await osrm([state.from,...state.vias,state.to],!noToll); state.alt={noToll:!noToll,km:r.distance/1000,min:r.duration/60}; }catch(e){}
     state.stops=[]; state.planError=null; state.chargers=[];
     drawRoute(state.base,true); map.fitBounds(L.geoJSON(state.base.geometry).getBounds(),{padding:[30,30]});
     setStatus('Recherche des bornes Tesla et Powerdot le long du trajet…');
@@ -452,8 +490,9 @@ $('#go').onclick=async()=>{
 async function finalize(){
   state.stops.sort((a,b)=>a.km-b.km);
   setStatus('Mise à jour du trajet…');
-  state.route=state.stops.length?await osrm([state.from,...state.stops,state.to]):state.base;
-  state.sim=simulate(state.route,state.stops,settings());
+  state.points=state.stops.length?[...state.vias,...state.stops].sort((a,b)=>a.km-b.km):state.vias.slice();
+  state.route=state.stops.length?await osrm([state.from,...state.points,state.to],state.noToll):state.base;
+  state.sim=simulate(state.route,state.points,settings());
   drawAll(); renderResults(); setStatus('');
 }
 async function toggleStop(id){
@@ -469,8 +508,9 @@ async function replan(){
   const p=autoPlan(state.prof,state.chargers,settings()); state.stops=p.stops; state.planError=p.error||null;
   busy=true; try{ await finalize(); }catch(e){ setStatus(e.message,true); } busy=false;
 }
-async function resim(){ if(!state.route) return; state.sim=simulate(state.route,state.stops,settings()); renderResults(); }
-window.toggleStop=toggleStop; window.replan=replan; window.resim=resim;
+async function resim(){ if(!state.route) return; state.sim=simulate(state.route,state.points,settings()); renderResults(); }
+function switchToll(){ if(busy) return; $('#noToll').checked=!$('#noToll').checked; saveSettings(); $('#go').click(); }
+window.toggleStop=toggleStop; window.replan=replan; window.resim=resim; window.switchToll=switchToll;
 
 /* ================== AFFICHAGE CARTE ================== */
 function drawRoute(route,isBase){
@@ -496,6 +536,7 @@ function drawAll(){
     m.bindPopup(()=>popupHtml(c)); m.addTo(layers.chargers);
   });
   const pin=(p,cls,t)=>L.marker([p.lat,p.lon],{icon:L.divIcon({className:'',html:`<div class="${cls}">${t}</div>`,iconSize:[26,26],iconAnchor:[13,13]})}).addTo(layers.pins);
+  state.vias.forEach(v=>pin(v,'pinV','E'));
   pin(state.from,'pinA','A'); pin(state.to,'pinB','B');
 }
 
@@ -503,7 +544,7 @@ function drawAll(){
 function gmapsUrl(){
   const ll=p=>(+p.lat).toFixed(6)+','+(+p.lon).toFixed(6);
   let u=`https://www.google.com/maps/dir/?api=1&origin=${ll(state.from)}&destination=${ll(state.to)}&travelmode=driving`;
-  if(state.stops.length) u+='&waypoints='+encodeURIComponent(state.stops.map(ll).join('|'));
+  if(state.points.length) u+='&waypoints='+encodeURIComponent(state.points.map(ll).join('|'));
   return u;
 }
 function renderResults(){
@@ -512,15 +553,22 @@ function renderResults(){
   let h=`<div class="card"><h2>Résumé</h2>
   <div class="sum"><div><small>Distance</small><b>${Math.round(sim.km)} km</b></div><div><small>Conduite</small><b>${fmtDur(sim.driveMin)}</b></div><div><small>Recharge</small><b>${fmtDur(sim.chargeMin)}</b></div></div>
   <div class="sum"><div><small>Total</small><b>${fmtDur(total)}</b></div><div><small>Arrêts</small><b>${state.stops.length}</b></div><div><small>Arrivée</small><b class="pct ${pctClass(sim.arrive,s.resDest)}">${Math.round(sim.arrive)} %</b></div></div>`;
+  if(state.alt){
+    const dK=Math.round(state.alt.km-sim.km), dM=Math.round(state.alt.min-sim.driveMin), sg=x=>(x>0?'+':x<0?'−':'±')+Math.abs(x);
+    h+=`<div class="alert info">${state.noToll?'🚫 Trajet <b>sans péage</b>.':'🛣️ Trajet <b>avec péages</b> autorisés.'}<br>Version ${state.alt.noToll?'sans péage':'avec péages'} : ${sg(dK)} km, ${sg(dM)} min de conduite. <button class="btn2" style="margin-top:6px" onclick="switchToll()">Prendre la version ${state.alt.noToll?'sans péage':'avec péages'}</button></div>`;
+  }else if(state.noToll) h+=`<div class="alert info">🚫 Trajet <b>sans péage</b>.</div>`;
   if(state.planError) h+=`<div class="alert bad">${esc(state.planError)}</div>`;
   sim.warns.forEach(w=>h+=`<div class="alert ${w.lvl}">${esc(w.t)}</div>`);
   if(!state.chargers.length&&!state.planError) h+=`<div class="alert info">Aucune borne Tesla/Powerdot trouvée à moins de ${$('#radius').value} km de la route. Élargis l'écart dans les réglages.</div>`;
   h+=`<ul class="tl"><li><div class="ico" style="background:var(--ok);color:#fff">A</div><div class="t">${esc(state.from.label)}</div><div class="s">Départ avec <span class="pct ok">${s.soc} %</span></div></li>`;
   sim.steps.forEach((st,i)=>{
     h+=`<li class="leg">${Math.round(st.legKm)} km · ${fmtDur(st.legMin)} · −${Math.round(st.used)} %</li>`;
+    if(st.via){
+      h+=`<li><div class="ico" style="background:#9b6bff;color:#fff">E</div><div class="t">${esc(st.via.name)}</div><div class="s">Étape · arrivée avec <span class="pct ${pctClass(st.arrive,s.resCh)}">${Math.round(st.arrive)} %</span></div></li>`;
+    }
     if(st.stop){
       const c=st.stop;
-      h+=`<li><div class="ico" style="background:var(--stop)">${i+1}</div>
+      h+=`<li><div class="ico" style="background:var(--stop)">${st.no}</div>
       <div class="t">${esc(c.name)}</div>
       <div class="s">${c.op==='tesla'?'Tesla':'Powerdot'} · ${c.known?Math.round(c.kw)+' kW':'≈'+Math.round(c.kw)+' kW (non renseigné)'} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route</div>
       <div class="s">Arrivée <span class="pct ${pctClass(st.arrive,s.resCh)}">${Math.round(st.arrive)} %</span> → charger à <span class="pct ok">${Math.round(st.target)} %</span> · ≈ ${fmtDur(st.mins)}</div>
@@ -536,7 +584,7 @@ function renderResults(){
       h+=`<li><span class="dot" style="background:${c.op==='tesla'?'var(--tesla)':'var(--pd)'}"></span><div class="n"><b>${esc(c.name)}</b><span>Km ${Math.round(c.km)} · ${c.known?Math.round(c.kw)+' kW':'kW ?'} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route</span></div><button class="add ${on?'on':''}" onclick="toggleStop('${c.id}')">${on?'✓':'+'}</button></li>`; });
     h+=`</ul></details></div>`;
   }
-  h+=`<div class="foot">Estimations : consommation calculée selon la vitesse de chaque tronçon (sans dénivelé), temps de charge selon une courbe type Model 3 LFP. Bornes issues d'OpenStreetMap : certaines peuvent manquer ou être mal renseignées, et l'occupation en temps réel n'est pas connue — vérifie dans l'app Tesla avant de partir.</div>`;
+  h+=`<div class="foot">Estimations : consommation calculée selon la vitesse de chaque tronçon (sans dénivelé), temps de charge selon une courbe type Model 3 LFP. Bornes issues d'OpenStreetMap : certaines peuvent manquer ou être mal renseignées, et l'occupation en temps réel n'est pas connue — vérifie dans l'app Tesla avant de partir.${state.noToll?' <b>Sans péage :</b> active aussi « Éviter les péages » dans Google Maps / Waze, le lien ne transmet pas ce réglage.':''}</div>`;
   el.innerHTML=h;
 }
 </script>
