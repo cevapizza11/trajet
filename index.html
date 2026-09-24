@@ -17,7 +17,7 @@ header h1 span{color:var(--tesla)}
 .layout{display:flex;flex-direction:column}
 #side{padding:12px;display:flex;flex-direction:column;gap:12px}
 #side>*{flex-shrink:0}
-#mapwrap{height:55vh;min-height:320px;position:relative;order:0}
+#mapwrap{height:55vh;min-height:320px;position:relative;order:0;overflow:hidden}
 #map{position:absolute;inset:0;background:#1a1d24}
 @media (min-width:900px){.layout{flex-direction:row;height:calc(100vh - 49px)}#side{width:410px;overflow-y:auto;flex:none}#mapwrap{flex:1;height:auto}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
@@ -97,7 +97,7 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
 <body>
 <header>
   <h1>Trajet <span>Model 3</span> ⚡</h1>
-  <div class="ver">v.24/09/2026 15:00</div>
+  <div class="ver">v.24/09/2026 16:12</div>
 </header>
 
 <div class="layout">
@@ -205,6 +205,7 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
     <div id="map"></div>
     <div id="navbar" class="hide"></div>
     <button class="gpsbtn" id="gpsBtn">➤ GPS</button>
+    <button class="gpsbtn hide" id="orientBtn" style="bottom:78px">⬆ Sens de la route</button>
     <div class="legend">
       <div><span class="dot" style="background:var(--tesla)"></span>Tesla</div>
       <div><span class="dot" style="background:var(--pd)"></span>Powerdot</div>
@@ -214,6 +215,7 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet-rotate@0.2.8/dist/leaflet-rotate.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
@@ -272,7 +274,8 @@ setTimeout(()=>{ updateBaseInfo(); basePromise=loadBase().then(b=>{ updateBaseIn
 setTimeout(()=>{ $('#baseBtn').onclick=async()=>{ const b=$('#baseBtn'); b.disabled=true; b.textContent='Téléchargement…'; basePromise=loadBase(true); await basePromise; updateBaseInfo(); b.disabled=false; b.textContent='↻ Mettre à jour la liste des bornes maintenant'; }; },0);
 
 /* ================== CARTE ================== */
-const map = L.map('map',{zoomControl:true}).setView([43.18,3.0],8);
+const map = L.map('map',{zoomControl:true,rotate:true,rotateControl:false,touchRotate:false,bearing:0}).setView([43.18,3.0],8);
+const CAN_ROTATE=typeof map.setBearing==='function';
 const light = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles © Esri — © OpenStreetMap'});
 const osm   = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'});
 const dark  = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',{maxZoom:16,attribution:'Tiles © Esri'});
@@ -741,14 +744,19 @@ function addrHtml(c,br){
   return (br?'<br>':'<span class="addr">')+`📍 ${esc(a)} · <a href="${link}" target="_blank" rel="noopener">Waze</a>`+(br?'':'</span>');
 }
 /* ================== MODE GPS (position qui suit le trajet) ================== */
+let headingUp=true, smoothHd=0, hdRef=null;
+function setMapBearing(b){ if(CAN_ROTATE) map.setBearing(b); }
+function mapBearing(){ return CAN_ROTATE?(map.getBearing?map.getBearing():0):0; }
+$('#orientBtn').onclick=()=>{ headingUp=!headingUp; if(!headingUp) setMapBearing(0); else if(lastPos) smoothHd=heading; gpsLabel(); };
 let watchId=null, meMk=null, meAcc=null, follow=true, wakeLock=null, lastPos=null, heading=0;
 function meIcon(hd){ return L.divIcon({className:'',html:`<div class="me" style="transform:rotate(${hd}deg)"><div class="mearrow"></div></div>`,iconSize:[34,34],iconAnchor:[17,17]}); }
-function gpsLabel(){ const b=$('#gpsBtn'); if(watchId===null){ b.textContent='➤ GPS'; b.classList.remove('on'); } else { b.classList.add('on'); b.textContent=follow?'■ Arrêter GPS':'⌖ Recentrer'; } }
+function gpsLabel(){ $('#orientBtn').classList.toggle('hide',watchId===null||!CAN_ROTATE); $('#orientBtn').textContent=headingUp?'⬆ Sens de la route':'🧭 Nord en haut'; const b=$('#gpsBtn'); if(watchId===null){ b.textContent='➤ GPS'; b.classList.remove('on'); } else { b.classList.add('on'); b.textContent=follow?'■ Arrêter GPS':'⌖ Recentrer'; } }
 async function gpsClick(){
   if(watchId!==null&&!follow){ follow=true; if(lastPos) map.setView(lastPos,Math.max(map.getZoom(),14)); gpsLabel(); return; }
   if(watchId!==null){ // arrêt
     navigator.geolocation.clearWatch(watchId); watchId=null;
     if(meMk){ map.removeLayer(meMk); map.removeLayer(meAcc); meMk=null; }
+    setMapBearing(0); $('#orientBtn').classList.add('hide');
     $('#navbar').classList.add('hide'); try{ wakeLock&&wakeLock.release(); }catch(e){} wakeLock=null; gpsLabel(); return;
   }
   const nb=$('#navbar'); nb.classList.remove('hide');
@@ -781,13 +789,26 @@ map.on('dragstart',()=>{ if(watchId!==null&&follow){ follow=false; gpsLabel(); }
 function onPos(p){
   gotFix=true;
   const ll=[p.coords.latitude,p.coords.longitude];
-  let hd=p.coords.heading;
-  if((hd==null||isNaN(hd))&&lastPos){ const dy=ll[0]-lastPos[0], dx=(ll[1]-lastPos[1])*Math.cos(ll[0]*Math.PI/180); if(Math.hypot(dx,dy)>0.00005) hd=(Math.atan2(dx,dy)*180/Math.PI+360)%360; }
-  if(hd!=null&&!isNaN(hd)) heading=hd;
+  // cap : celui du GPS si on roule (> 7 km/h), sinon calculé entre 2 positions distantes d'au moins 12 m
+  let hd=null; const spd=p.coords.speed;
+  if(p.coords.heading!=null&&!isNaN(p.coords.heading)&&(spd==null||spd>2)) hd=p.coords.heading;
+  if(hd==null&&hdRef){ const dy=ll[0]-hdRef[0], dx=(ll[1]-hdRef[1])*Math.cos(ll[0]*Math.PI/180); if(Math.hypot(dx,dy)*111320>12){ hd=(Math.atan2(dx,dy)*180/Math.PI+360)%360; hdRef=ll; } }
+  if(!hdRef) hdRef=ll; else if(hd!=null) hdRef=ll;
+  if(hd!=null) heading=hd;
   lastPos=ll;
-  if(!meMk){ meAcc=L.circle(ll,{radius:p.coords.accuracy||20,color:'#3e8bff',weight:1,fillOpacity:.08,interactive:false}).addTo(map); meMk=L.marker(ll,{icon:meIcon(heading),zIndexOffset:3000,interactive:false}).addTo(map); }
-  else { meMk.setLatLng(ll); meMk.setIcon(meIcon(heading)); meAcc.setLatLng(ll).setRadius(p.coords.accuracy||20); }
-  if(follow) map.setView(ll,Math.max(map.getZoom(),14),{animate:true});
+  // orientation de la carte : cap lissé pour éviter les à-coups
+  if(headingUp&&CAN_ROTATE){ const d=((heading-smoothHd+540)%360)-180; smoothHd=(smoothHd+d*0.6+360)%360; setMapBearing(-smoothHd); }
+  const arrow=(heading+mapBearing()+360)%360; // la flèche est dessinée par rapport à l'écran
+  if(!meMk){ meAcc=L.circle(ll,{radius:p.coords.accuracy||20,color:'#3e8bff',weight:1,fillOpacity:.08,interactive:false}).addTo(map); meMk=L.marker(ll,{icon:meIcon(arrow),zIndexOffset:3000,interactive:false}).addTo(map); }
+  else { meMk.setLatLng(ll); meMk.setIcon(meIcon(arrow)); meAcc.setLatLng(ll).setRadius(p.coords.accuracy||20); }
+  if(follow){
+    const z=Math.max(map.getZoom(),headingUp?15:14);
+    // en mode "sens de la route", la voiture est placée dans le bas de l'écran pour voir plus loin devant
+    let c=L.latLng(ll);
+    if(headingUp&&CAN_ROTATE){ const mpp=156543.03*Math.cos(ll[0]*Math.PI/180)/Math.pow(2,z), dist=map.getSize().y*0.25*mpp, r=smoothHd*Math.PI/180;
+      c=L.latLng(ll[0]+dist*Math.cos(r)/111320, ll[1]+dist*Math.sin(r)/(111320*Math.cos(ll[0]*Math.PI/180))); }
+    map.setView(c,z,{animate:true});
+  }
   updateNav(ll);
 }
 function updateNav(ll){
