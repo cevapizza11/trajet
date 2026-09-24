@@ -95,7 +95,7 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
 <body>
 <header>
   <h1>Trajet <span>Model 3</span> ⚡</h1>
-  <div class="ver">v.24/09/2026 09:50</div>
+  <div class="ver">v.24/09/2026 12:54</div>
 </header>
 
 <div class="layout">
@@ -186,6 +186,8 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
           <label class="chk"><input type="checkbox" id="opTesla" checked><span class="dot" style="background:var(--tesla)"></span> Tesla Superchargers</label>
           <label class="chk"><input type="checkbox" id="opPd" checked><span class="dot" style="background:var(--pd)"></span> Powerdot</label>
           <div class="alert info" id="rulesTxt" style="margin-top:8px"></div>
+          <div class="alert info" id="baseInfo"></div>
+          <button class="btn2" id="baseBtn" style="margin-bottom:8px">↻ Mettre à jour la liste des bornes maintenant</button>
           <div class="foot">Véhicule : Model 3 Propulsion 2022 (batterie LFP ≈ 57,5 kWh utiles, charge max ≈ 170 kW). Sur une LFP, charger à 100 % régulièrement est sans problème ; en trajet, 80 % reste le plus rapide.</div>
         </div>
       </details>
@@ -210,6 +212,8 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
 /* ================== CONFIG VÉHICULE ================== */
 const CAR = { name: 'Model 3 Propulsion 2022', usable: 57.5 }; // kWh utiles (LFP)
@@ -260,6 +264,10 @@ function refreshLabels(){
 loadSettings(); refreshLabels();
 SAVE_IDS.forEach(id=>$('#'+id).addEventListener('input',()=>{refreshLabels();saveSettings();}));
 SAVE_IDS.forEach(id=>$('#'+id).addEventListener('change',saveSettings));
+
+/* démarrage : liste officielle des bornes en arrière-plan */
+setTimeout(()=>{ updateBaseInfo(); basePromise=loadBase().then(b=>{ updateBaseInfo(); return b; }); },0);
+setTimeout(()=>{ $('#baseBtn').onclick=async()=>{ const b=$('#baseBtn'); b.disabled=true; b.textContent='Téléchargement…'; basePromise=loadBase(true); await basePromise; updateBaseInfo(); b.disabled=false; b.textContent='↻ Mettre à jour la liste des bornes maintenant'; }; },0);
 
 /* ================== CARTE ================== */
 const map = L.map('map',{zoomControl:true}).setView([43.18,3.0],8);
@@ -396,7 +404,122 @@ function legEnergy(leg){
 }
 
 /* ================== BORNES (OpenStreetMap / Overpass) ================== */
-async function fetchChargers(prof,radiusKm){
+/* ================== LISTE OFFICIELLE DES BORNES (base nationale IRVE) ==================
+   Téléchargée une fois (Tesla + Powerdot de toute la France), gardée sur l'appareil 7 jours (et partagée via Firebase si configuré).
+   => les bornes s'affichent même quand les serveurs OpenStreetMap sont saturés. */
+const BASE_KEY='bornesFR_v1', BASE_TTL=7*864e5; // 7 jours
+
+/* ================== FIREBASE : liste partagée entre tous tes appareils ==================
+   ⚙️ Colle ici la config de ton projet Firebase (Console > Paramètres du projet > Tes applications > Config).
+   Laisse null pour désactiver le partage (chaque appareil garde alors sa propre copie). */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAIp5OWqiUtOJN7JLLT5fo1yHSVnIXLWfs",
+  authDomain: "trajet-model3.firebaseapp.com",
+  projectId: "trajet-model3",
+  storageBucket: "trajet-model3.firebasestorage.app",
+  messagingSenderId: "798484494095",
+  appId: "1:798484494095:web:63a31283f9d311ad14b07a"
+};
+let fdb=null;
+try{ if(FIREBASE_CONFIG&&window.firebase){ firebase.initializeApp(FIREBASE_CONFIG); fdb=firebase.firestore(); } }catch(e){ console.warn('Firebase :',e); }
+const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('délai dépassé')),ms))]);
+async function readShared(){ // document Firestore bornes/france = {t, n, data (texte JSON)}
+  if(!fdb) return null;
+  try{ const d=await withTimeout(fdb.collection('bornes').doc('france').get(),10000); if(!d.exists) return null; const x=d.data(); return {t:x.t,list:JSON.parse(x.data),shared:true}; }
+  catch(e){ console.warn('Lecture Firebase :',e); return null; }
+}
+async function writeShared(b){
+  if(!fdb) return;
+  try{ const data=JSON.stringify(b.list); if(data.length>950000) return; await withTimeout(fdb.collection('bornes').doc('france').set({t:b.t,n:b.list.length,data}),15000); }
+  catch(e){ console.warn('Écriture Firebase :',e); }
+}
+const ODS=[{host:'https://odre.opendatasoft.com',ds:'bornes-irve'},{host:'https://public.opendatasoft.com',ds:'mobilityref-france-irve-220'}];
+let basePromise=null;
+function readBase(){ try{ return JSON.parse(localStorage.getItem(BASE_KEY)||'null'); }catch(e){ return null; } }
+async function fetchT(url,ms){ const ctl=new AbortController(), tm=setTimeout(()=>ctl.abort(),ms); try{ const r=await fetch(url,{signal:ctl.signal}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.json(); } finally{ clearTimeout(tm); } }
+function groupBase(rows,f){
+  const m=new Map();
+  for(const r of rows){
+    const txt=[r[f.op],r[f.en],r[f.st]].filter(Boolean).join(' ').toLowerCase();
+    const op=txt.includes('tesla')?0:(/power ?dot/.test(txt)?1:-1); if(op<0) continue;
+    let lat,lon; const g=f.geo&&r[f.geo];
+    if(g&&typeof g==='object'){ lat=+g.lat; lon=+g.lon; }
+    else if(f.xy&&r[f.xy]){ const x=String(r[f.xy]).match(/-?\d+(\.\d+)?/g); if(x&&x.length>=2){ lon=+x[0]; lat=+x[1]; } }
+    if(!isFinite(lat)||!isFinite(lon)) continue;
+    if(lat<35&&lon>35){ const t=lat; lat=lon; lon=t; } // coordonnées inversées
+    if(lat<35||lat>72) continue;
+    let kw=parseFloat(r[f.kw])||0; if(kw>1000) kw/=1000;
+    const key=(r[f.id]||'')+'|'+lat.toFixed(3)+','+lon.toFixed(3), e=m.get(key);
+    if(e){ e[3]=Math.max(e[3],kw); e[5]++; }
+    else m.set(key,[+lat.toFixed(5),+lon.toFixed(5),op,kw,String(r[f.st]||'').slice(0,60),1,String(r[f.city]||'').slice(0,40)]);
+  }
+  return [...m.values()];
+}
+async function downloadBase(){
+  let lastErr;
+  for(const src of ODS){
+    try{
+      const api=`${src.host}/api/explore/v2.1/catalog/datasets/${src.ds}`;
+      const meta=await fetchT(api,15000), F=meta.fields||[];
+      const find=(...res)=>{ for(const re of res){ const x=F.find(f=>re.test(f.name)); if(x) return x.name; } };
+      const f={ op:find(/^nom_operateur$/,/operateur/), en:find(/^nom_enseigne$/,/enseigne/), st:find(/^nom_station$/,/station$/),
+        id:find(/^id_station_itinerance$/,/id_station/), kw:find(/^puissance_nominale$/,/puissance/),
+        geo:(F.find(x=>x.type==='geo_point_2d')||{}).name, xy:find(/coordonnees/i), city:find(/^consolidated_commune$/,/^commune$/,/commune/) };
+      if(!f.kw||!(f.geo||f.xy)||!(f.op||f.en)) throw new Error('format inattendu');
+      const sel=[...new Set(Object.values(f).filter(Boolean))].join(',');
+      const rows=await fetchT(`${api}/exports/json?select=${encodeURIComponent(sel)}&where=${encodeURIComponent('"tesla" OR "powerdot" OR "power dot"')}`,60000);
+      const list=groupBase(rows,f);
+      if(list.length<20) throw new Error('liste trop courte');
+      return list;
+    }catch(e){ lastErr=e; }
+  }
+  throw lastErr||new Error('liste officielle indisponible');
+}
+// Ordre : copie de l'appareil (si < 7 j) -> Firebase partagé (si < 7 j) -> téléchargement officiel (puis envoi dans Firebase)
+async function loadBase(force){
+  const save=x=>{ try{ localStorage.setItem(BASE_KEY,JSON.stringify(x)); }catch(e){} };
+  let b=readBase();
+  if(b&&!force&&Date.now()-b.t<BASE_TTL) return b;
+  const sh=await readShared();
+  if(sh&&!force&&Date.now()-sh.t<BASE_TTL+864e5){ save(sh); return sh; } // +1 j de marge : la Cloud Function met à jour chaque lundi
+  try{
+    const list=await downloadBase(); b={t:Date.now(),list}; save(b);
+    writeShared(b); // ce téléchargement profite à tous tes appareils
+  }catch(e){
+    console.warn('Liste officielle :',e); // téléchargement impossible : on garde la liste la plus récente disponible
+    if(sh&&(!b||sh.t>b.t)){ b=sh; save(sh); }
+  }
+  return b;
+}
+function updateBaseInfo(){
+  const b=readBase(), el=$('#baseInfo'); if(!el) return;
+  el.innerHTML=b?`📋 Liste officielle des bornes : <b>${b.list.length}</b> stations Tesla / Powerdot en France, téléchargée le ${new Date(b.t).toLocaleDateString('fr-FR')} (mise à jour automatique tous les 7 jours${fdb?', <b>partagée entre tous tes appareils via Firebase</b>':', copie propre à cet appareil'}).`
+    :'📋 Liste officielle des bornes : pas encore téléchargée (elle le sera au prochain calcul).';
+}
+function fromBase(a){
+  const [lat,lon,o,kw,name,n,city]=a, op=o===0?'tesla':'powerdot';
+  return {id:'b'+lat+','+lon,op,lat,lon,kw:kw||(op==='tesla'?150:50),known:kw>0,slow:kw>0&&kw<40,name:name||(op==='tesla'?'Tesla Supercharger':'Powerdot'),cap:n?String(n):'',city:city||'',hours:''};
+}
+function routeBox(prof,km){
+  let a=90,b=180,c=-90,d=-180; for(const [lo,la] of prof.coords){ if(la<a)a=la; if(la>c)c=la; if(lo<b)b=lo; if(lo>d)d=lo; }
+  const mLat=km/111+0.02, mLon=mLat/Math.cos((a+c)/2*Math.PI/180); return [a-mLat,b-mLon,c+mLat,d+mLon];
+}
+// Combine les 2 sources : liste officielle (cache) + OpenStreetMap (si le serveur répond)
+async function getChargers(prof,rmax){
+  setStatus('Recherche des bornes Tesla et Powerdot…');
+  const base=await (basePromise||(basePromise=loadBase()));
+  basePromise=null; updateBaseInfo();
+  const out=[]; let ok=false; state.src={base:0,osm:false};
+  if(base&&base.list.length){
+    ok=true; const bb=routeBox(prof,rmax);
+    base.list.forEach(a=>{ if(a[0]>=bb[0]&&a[0]<=bb[2]&&a[1]>=bb[1]&&a[1]<=bb[3]){ out.push(fromBase(a)); state.src.base++; } });
+  }
+  try{ const els=await fetchChargers(prof,rmax,ok?10000:30000); out.push(...els.map(parseCharger).filter(Boolean)); state.src.osm=true; ok=true; }
+  catch(e){ if(!ok) throw e; }
+  return out;
+}
+
+async function fetchChargers(prof,radiusKm,ms){
   // Découpe la route en tronçons de ~60 km -> une petite zone rectangulaire par tronçon (requête rapide)
   const {coords,D}=prof, mLat=radiusKm/111+0.01, boxes=[]; let s=0;
   while(s<coords.length-1){
@@ -409,20 +532,18 @@ async function fetchChargers(prof,radiusKm){
   }
   const parts=boxes.map(bb=>['operator','brand','network','name'].map(k=>`nwr["amenity"="charging_station"]["${k}"~"tesla|power ?dot",i](${bb});`).join('')).join('');
   const q=`[out:json][timeout:60];(${parts});out center tags;`;
-  let lastErr;
-  for(const ep of OVERPASS){
-    const ctl=new AbortController(), tm=setTimeout(()=>ctl.abort(),30000); // 30 s max par serveur
+  const tries=OVERPASS.map(ep=>(async()=>{
+    const ctl=new AbortController(), tm=setTimeout(()=>ctl.abort(),ms||25000);
     try{
-      setStatus('Recherche des bornes Tesla et Powerdot… ('+new URL(ep).host+')');
       const r=await fetch(ep,{method:'POST',body:new URLSearchParams({data:q}),signal:ctl.signal});
-      clearTimeout(tm);
-      if(!r.ok){ lastErr=new Error('HTTP '+r.status); continue; }
+      if(!r.ok) throw new Error('HTTP '+r.status);
       const j=await r.json();
-      if(j.remark&&!(j.elements||[]).length){ lastErr=new Error(j.remark); continue; }
+      if(j.remark&&!(j.elements||[]).length) throw new Error(j.remark);
       return j.elements||[];
-    }catch(e){ clearTimeout(tm); lastErr=e; }
-  }
-  throw lastErr||new Error('Serveur des bornes indisponible');
+    }finally{ clearTimeout(tm); }
+  })());
+  try{ return await Promise.any(tries); } // tous les serveurs en même temps : le premier qui répond gagne
+  catch(e){ throw (e.errors&&e.errors[0])||e; }
 }
 function parseCharger(el){
   const t=el.tags||{}; const lat=el.lat??(el.center&&el.center.lat), lon=el.lon??(el.center&&el.center.lon);
@@ -555,10 +676,10 @@ $('#go').onclick=async()=>{
     setStatus('Recherche des bornes Tesla et Powerdot le long du trajet…');
     let raw=[];
     const R=+$('#radius').value, RMAX=Math.max(R,15);
-    try{ raw=await fetchChargers(state.prof,RMAX); }
-    catch(e){ state.planError='Les serveurs des bornes ne répondent pas ('+(e.name==='AbortError'?'délai dépassé':e.message)+'). Réessaie dans une minute.'; }
+    try{ raw=await getChargers(state.prof,RMAX); }
+    catch(e){ state.planError='Aucune source de bornes disponible pour l\'instant ('+(e.name==='AbortError'?'délai dépassé':e.message)+'). Réessaie dans une minute.'; }
     const ops={tesla:$('#opTesla').checked,powerdot:$('#opPd').checked};
-    state.chargers=dedupe(raw.map(parseCharger).filter(c=>c&&ops[c.op]));
+    state.chargers=dedupe(raw.filter(c=>c&&ops[c.op]));
     state.chargers.forEach(c=>project(c,state.prof));
     const all=state.chargers; state.chargers=all.filter(c=>c.off<=R); state.widened=false;
     if(state.chargers.filter(c=>!c.slow).length<3&&all.length>state.chargers.length){ state.chargers=all; state.widened=RMAX; } // peu de bornes : on montre jusqu'à 15 km
@@ -733,7 +854,7 @@ function renderResults(){
       h+=`<li><span class="dot" style="background:${c.op==='tesla'?'var(--tesla)':'var(--pd)'}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>Km ${Math.round(c.km)} · ${c.known?Math.round(c.kw)+' kW':'kW ?'} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route · 🔋 <b class="pct ${pctClass(sa,settings().resCh)}">${Math.round(sa)} %</b></span></div><button class="add ${on?'on':''}" onclick="toggleStop('${c.id}')">${on?'✓':'+'}</button></li>`; });
     h+=`</ul></details></div>`;
   }
-  h+=`<div class="foot">Estimations : consommation calculée selon la vitesse de chaque tronçon (sans dénivelé), temps de charge selon une courbe type Model 3 LFP. Péage : km payants × tarif moyen réglable (≈ 0,11 €/km sur le réseau ASF en 2026), à ±15 % près ; tarifs réels sur vinci-autoroutes.com. Bornes issues d'OpenStreetMap : certaines peuvent manquer ou être mal renseignées, et l'occupation en temps réel n'est pas connue — vérifie dans l'app Tesla avant de partir.${state.noToll?' <b>Sans péage :</b> active aussi « Éviter les péages » dans Google Maps / Waze, le lien ne transmet pas ce réglage.':''}</div>`;
+  h+=`<div class="foot">Estimations : consommation calculée selon la vitesse de chaque tronçon (sans dénivelé), temps de charge selon une courbe type Model 3 LFP. Péage : km payants × tarif moyen réglable (≈ 0,11 €/km sur le réseau ASF en 2026), à ±15 % près ; tarifs réels sur vinci-autoroutes.com. Bornes : liste officielle nationale IRVE${state.src&&state.src.osm?' + OpenStreetMap':' (OpenStreetMap indisponible pour ce calcul)'} ; certaines peuvent manquer ou être mal renseignées, et l'occupation en temps réel n'est pas connue — vérifie dans l'app Tesla avant de partir.${state.noToll?' <b>Sans péage :</b> active aussi « Éviter les péages » dans Google Maps / Waze, le lien ne transmet pas ce réglage.':''}</div>`;
   el.innerHTML=h;
 }
 </script>
