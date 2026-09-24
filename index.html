@@ -88,7 +88,7 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
 <body>
 <header>
   <h1>Trajet <span>Model 3</span> ⚡</h1>
-  <div class="ver">v.24/09/2026 08:54</div>
+  <div class="ver">v.24/09/2026 09:13</div>
 </header>
 
 <div class="layout">
@@ -316,18 +316,51 @@ async function ensurePlace(key){
 /* ================== ITINÉRAIRE (OSRM) ================== */
 async function osrm(points,noToll){
   if(noToll===undefined) noToll=$('#noToll').checked;
+  if(noToll) return valhalla(points); // OSRM ne sait pas éviter les péages -> Valhalla
   const c=points.map(p=>(+p.lon).toFixed(6)+','+(+p.lat).toFixed(6)).join(';');
-  const q=`?overview=full&geometries=geojson&annotations=distance,duration&steps=true${noToll?'&exclude=toll':''}`;
+  const q='?overview=full&geometries=geojson&annotations=distance,duration&steps=true';
   let lastErr;
   for(const base of OSRM_SERVERS){
     try{
       const r=await fetch(base+c+q); const j=await r.json().catch(()=>({}));
       if(r.ok&&j.code==='Ok'&&j.routes&&j.routes.length) return j.routes[0];
-      if(j.code==='NoRoute'){ lastErr=new Error('Aucun itinéraire trouvé'+(noToll?' sans péage':'')); break; }
-      lastErr=new Error((noToll?'Calcul sans péage impossible':'Serveur d’itinéraire indisponible')+' ('+(j.message||j.code||r.status)+')');
+      if(j.code==='NoRoute'){ lastErr=new Error('Aucun itinéraire trouvé'); break; }
+      lastErr=new Error('Serveur d’itinéraire indisponible ('+(j.message||j.code||r.status)+')');
     }catch(e){ lastErr=new Error('Serveur d’itinéraire injoignable, réessaie dans un instant'); }
   }
   throw lastErr;
+}
+/* ---- Itinéraire SANS PÉAGE via Valhalla (serveur public OpenStreetMap), converti au format OSRM ---- */
+const VALHALLA='https://valhalla1.openstreetmap.de/route';
+function decode6(str){
+  let i=0,lat=0,lon=0; const out=[];
+  while(i<str.length){
+    let b,s=0,r=0; do{ b=str.charCodeAt(i++)-63; r|=(b&31)<<s; s+=5; }while(b>=32); lat+=(r&1)?~(r>>1):(r>>1);
+    s=0; r=0; do{ b=str.charCodeAt(i++)-63; r|=(b&31)<<s; s+=5; }while(b>=32); lon+=(r&1)?~(r>>1):(r>>1);
+    out.push([lon/1e6,lat/1e6]);
+  }
+  return out;
+}
+async function valhalla(points){
+  const body={locations:points.map(p=>({lat:+p.lat,lon:+p.lon,type:'break'})),costing:'auto',costing_options:{auto:{use_tolls:0}},units:'kilometers',language:'fr-FR'};
+  let r,j;
+  try{ r=await fetch(VALHALLA+'?json='+encodeURIComponent(JSON.stringify(body))); j=await r.json().catch(()=>({})); }
+  catch(e){ throw new Error('Serveur sans péage injoignable, réessaie dans un instant'); }
+  if(!r.ok||!j.trip) throw new Error('Calcul sans péage impossible ('+(j.error||j.status||r.status)+')');
+  const coords=[], legs=[];
+  j.trip.legs.forEach(L=>{
+    const sh=decode6(L.shape), ad=[], at=[], steps=[];
+    (L.maneuvers||[]).forEach(m=>{
+      const a=m.begin_shape_index, b=m.end_shape_index, ds=[]; let tot=0;
+      for(let k=a;k<b;k++){ const d=hav(sh[k],sh[k+1]); ds.push(d); tot+=d; }
+      const md=m.length*1000;
+      ds.forEach(d=>{ const f=tot>0?d/tot:0; ad.push(f*md); at.push(f*m.time); });
+      steps.push({distance:md,duration:m.time,intersections:[{classes:m.toll?['toll']:[]}]});
+    });
+    legs.push({distance:L.summary.length*1000,duration:L.summary.time,annotation:ad.length===sh.length-1?{distance:ad,duration:at}:null,steps});
+    if(coords.length) coords.push(...sh.slice(1)); else coords.push(...sh);
+  });
+  return {geometry:{type:'LineString',coordinates:coords},distance:j.trip.summary.length*1000,duration:j.trip.summary.time,legs};
 }
 // Km sur des tronçons à péage (classe "toll" fournie par OSRM à partir d'OpenStreetMap)
 function tollKm(route){ let km=0; route.legs.forEach(l=>(l.steps||[]).forEach(st=>{ const x=(st.intersections||[])[0]; if(x&&(x.classes||[]).includes('toll')) km+=st.distance/1000; })); return km; }
