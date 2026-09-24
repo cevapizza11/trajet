@@ -102,7 +102,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <h1>Trajet <span>Model 3</span> ⚡</h1>
-  <div class="ver">v.24/09/2026 16:55</div>
+  <div class="ver">v.24/09/2026 23:05</div>
 </header>
 
 <div class="layout">
@@ -139,6 +139,29 @@ body.navmode{overflow:hidden}
 
       <label class="chk"><input type="checkbox" id="auto" checked> Proposer automatiquement les arrêts recharge</label>
       <label class="chk"><input type="checkbox" id="noToll"> Éviter les péages</label>
+    </div>
+
+    <div class="card">
+      <details id="cityBox">
+        <summary>🔎 Bornes dans une ville</summary>
+        <div style="margin-top:10px">
+          <div class="field">
+            <label for="city">Ville</label>
+            <div class="row">
+              <input type="text" id="city" placeholder="Ex. : Narbonne" autocomplete="off">
+              <select id="cityR" style="width:auto;flex:none">
+                <option value="3">3 km</option>
+                <option value="5" selected>5 km</option>
+                <option value="10">10 km</option>
+                <option value="20">20 km</option>
+              </select>
+            </div>
+            <ul class="sugg" id="city-s"></ul>
+          </div>
+          <button class="btn" id="cityGo" style="height:44px;font-size:15px">Voir les bornes</button>
+          <div id="cityRes" style="margin-top:10px"></div>
+        </div>
+      </details>
     </div>
 
     <div class="card">
@@ -292,7 +315,7 @@ const osm   = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZ
 const dark  = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',{maxZoom:16,attribution:'Tiles © Esri'});
 light.addTo(map);
 L.control.layers({'Carte routière':light,'OpenStreetMap':osm,'Carte sombre':dark},null,{position:'topright'}).addTo(map);
-const layers = { route:L.layerGroup().addTo(map), chargers:L.layerGroup().addTo(map), pins:L.layerGroup().addTo(map) };
+const layers = { route:L.layerGroup().addTo(map), chargers:L.layerGroup().addTo(map), pins:L.layerGroup().addTo(map), city:L.layerGroup().addTo(map) };
 
 /* ================== GÉOCODAGE ================== */
 async function geocode(q){
@@ -342,7 +365,7 @@ $('#gps').onclick=()=>{
 $('#swap').onclick=()=>{ const a=state.from, b=state.to, va=$('#from').value; state.from=b; state.to=a; $('#from').value=$('#to').value; $('#to').value=va; };
 async function ensurePlace(key){
   if(state[key]) return state[key];
-  const q=$('#'+key).value.trim(); if(!q) throw new Error(key==='from'?'Indique un départ':'Indique une arrivée');
+  const q=$('#'+key).value.trim(); if(!q) throw new Error(key==='from'?'Indique un départ':key==='city'?'Indique une ville':'Indique une arrivée');
   const r=await geocode(q); if(!r.length) throw new Error('Adresse introuvable : '+q);
   state[key]=r[0]; $('#'+key).value=r[0].label; return r[0];
 }
@@ -689,7 +712,7 @@ $('#go').onclick=async()=>{
     // comparaison avec / sans péage
     state.alt=null;
     try{ const r=await osrm([state.from,...state.vias,state.to],!noToll); state.alt={noToll:!noToll,km:r.distance/1000,min:r.duration/60,tollKm:tollKm(r)}; }catch(e){}
-    state.stops=[]; state.planError=null; state.chargers=[];
+    state.stops=[]; state.planError=null; state.chargers=[]; layers.city.clearLayers();
     drawRoute(state.base,true); map.fitBounds(L.geoJSON(state.base.geometry).getBounds(),{padding:[30,30]});
     setStatus('Recherche des bornes Tesla et Powerdot le long du trajet…');
     let raw=[];
@@ -877,6 +900,55 @@ function updateNav(ll){
   t+=`<br><span style="font-size:12px;color:var(--mut)">🧭 ${curSpeed!=null?Math.round(curSpeed*3.6)+' km/h':'vitesse ?'} · cap ${Math.round(heading)}°${headingUp&&(curSpeed==null||curSpeed<2.5)?' · carte figée tant que tu ne roules pas':''}</span>`;
   nb.innerHTML=t;
 }
+
+
+/* ================== BORNES DANS UNE VILLE ================== */
+setupAuto('city');
+function cityPopup(c){
+  return `<div class="pop"><b>${esc(c.name)}</b><div class="m">${c.op==='tesla'?'Tesla Supercharger':'Powerdot'} · ${c.known?Math.round(c.kw)+' kW':'puissance non renseignée'}${c.cap?' · '+esc(c.cap)+' points de charge':''}${c.slow?'<br>Borne lente (AC)':''}<br>à ${c.dist.toFixed(1).replace('.',',')} km du centre${addrHtml(c,true)}</div></div>`;
+}
+async function citySearch(){
+  const btn=$('#cityGo'), out=$('#cityRes'); btn.disabled=true;
+  document.querySelectorAll('.sugg').forEach(l=>l.style.display='none');
+  try{
+    out.innerHTML='<div class="foot">Recherche…</div>';
+    const pl=await ensurePlace('city');
+    const base=await (basePromise||(basePromise=loadBase())); basePromise=null; updateBaseInfo();
+    if(!base||!base.list.length) throw new Error('La liste des bornes n\'est pas encore disponible sur cet appareil. Réessaie dans un instant (connexion nécessaire la première fois).');
+    const R=+$('#cityR').value, ops={tesla:$('#opTesla').checked,powerdot:$('#opPd').checked};
+    const res=base.list.map(fromBase).filter(c=>ops[c.op])
+      .map(c=>{ c.dist=distM([pl.lat,pl.lon],[c.lat,c.lon])/1000; return c; })
+      .filter(c=>c.dist<=R).sort((a,b)=>a.dist-b.dist);
+    const nom=pl.label.split(',')[0];
+    const stat=op=>{ const l=res.filter(c=>c.op===op); return {n:l.length,pts:l.reduce((a,c)=>a+(+c.cap||0),0),fast:l.filter(c=>!c.slow).length}; };
+    const T=stat('tesla'), P=stat('powerdot');
+    let h=`<div class="alert info"><b>${esc(nom)}</b> (rayon ${R} km) : <b>${res.length}</b> station${res.length>1?'s':''}</div>
+      <div class="sum" style="grid-template-columns:1fr 1fr">
+        <div><small><span class="dot" style="background:var(--tesla)"></span> Tesla</small><b>${T.n} station${T.n>1?'s':''}</b><small>${T.pts} points · ${T.fast} rapide${T.fast>1?'s':''}</small></div>
+        <div><small><span class="dot" style="background:var(--pd)"></span> Powerdot</small><b>${P.n} station${P.n>1?'s':''}</b><small>${P.pts} points · ${P.fast} rapide${P.fast>1?'s':''}</small></div>
+      </div>`;
+    if(!res.length) h+=`<div class="foot">Aucune borne Tesla / Powerdot dans ce rayon. Essaie un rayon plus grand.</div>`;
+    else{
+      h+=`<button class="btn2" id="cityMap" style="margin-bottom:6px">🗺️ Voir sur la carte</button><ul class="clist">`;
+      res.forEach((c,i)=>{ h+=`<li data-i="${i}" style="cursor:pointer"><span class="dot" style="background:${c.op==='tesla'?'var(--tesla)':'var(--pd)'}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>${c.dist.toFixed(1).replace('.',',')} km du centre · ${c.known?Math.round(c.kw)+' kW':'kW ?'}${c.cap?' · '+esc(c.cap)+' points':''}</span>${addrHtml(c)}</div></li>`; });
+      h+='</ul>';
+    }
+    out.innerHTML=h;
+    // carte
+    layers.city.clearLayers();
+    const mk=[];
+    L.marker([pl.lat,pl.lon],{icon:L.divIcon({className:'',html:'<div class="pinV">★</div>',iconSize:[24,24],iconAnchor:[12,12]})}).addTo(layers.city);
+    L.circle([pl.lat,pl.lon],{radius:R*1000,color:'#9b6bff',weight:1,fillOpacity:.04,interactive:false}).addTo(layers.city);
+    res.forEach(c=>{ const m=L.circleMarker([c.lat,c.lon],{radius:c.slow?6:9,color:'#111',weight:2,fillColor:c.op==='tesla'?'#e82127':'#12b5cb',fillOpacity:c.slow?.6:1}).bindPopup(()=>cityPopup(c)).addTo(layers.city); mk.push(m); });
+    map.fitBounds(L.latLng(pl.lat,pl.lon).toBounds(R*2000),{padding:[20,20]});
+    const show=()=>{ const w=$('#mapwrap'); if(w.getBoundingClientRect().top>window.innerHeight*0.5) w.scrollIntoView({behavior:'smooth'}); };
+    if($('#cityMap')) $('#cityMap').onclick=show;
+    out.querySelectorAll('.clist li').forEach(li=>li.onclick=e=>{ if(e.target.closest('a')) return; const i=+li.dataset.i; map.setView([res[i].lat,res[i].lon],15); mk[i].openPopup(); show(); });
+  }catch(e){ out.innerHTML=`<div class="alert bad">${esc(e.message||'Erreur')}</div>`; }
+  btn.disabled=false;
+}
+$('#cityGo').onclick=citySearch;
+$('#city').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); citySearch(); } });
 
 /* ================== AFFICHAGE CARTE ================== */
 function drawRoute(route,isBase){
