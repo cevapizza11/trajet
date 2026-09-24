@@ -25,7 +25,7 @@ header h1 span{color:var(--tesla)}
 label{display:block;font-size:12px;color:var(--mut);margin:0 0 4px}
 .field{position:relative;margin-bottom:10px}
 .row{display:flex;gap:8px;align-items:center}
-input[type=text],select{width:100%;background:var(--card2);color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:11px 12px;font-size:16px;outline:none}
+input[type=text],input[type=time],select{width:100%;background:var(--card2);color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:11px 12px;font-size:16px;outline:none}
 input[type=text]:focus,select:focus{border-color:var(--acc)}
 .ib{flex:none;width:46px;height:46px;border-radius:9px;border:1px solid var(--line);background:var(--card2);color:var(--txt);font-size:18px;cursor:pointer}
 .sugg{position:absolute;left:0;right:0;top:100%;z-index:2000;background:var(--card2);border:1px solid var(--line);border-radius:9px;margin-top:4px;list-style:none;padding:4px;display:none;max-height:260px;overflow:auto}
@@ -97,7 +97,7 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
 <body>
 <header>
   <h1>Trajet <span>Model 3</span> ⚡</h1>
-  <div class="ver">v.24/09/2026 16:12</div>
+  <div class="ver">v.24/09/2026 16:21</div>
 </header>
 
 <div class="layout">
@@ -126,6 +126,10 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
       <div class="slider">
         <div class="top"><span>Batterie au départ</span><b id="soc-v"></b></div>
         <input type="range" id="soc" min="10" max="100" step="1" value="90">
+      </div>
+      <div class="field">
+        <label for="depTime">Heure de départ</label>
+        <div class="row"><input type="time" id="depTime"><button class="ib" id="depNow" title="Maintenant" style="width:auto;padding:0 12px;font-size:14px">Maintenant</button></div>
       </div>
 
       <label class="chk"><input type="checkbox" id="auto" checked> Proposer automatiquement les arrêts recharge</label>
@@ -269,6 +273,8 @@ loadSettings(); refreshLabels();
 SAVE_IDS.forEach(id=>$('#'+id).addEventListener('input',()=>{refreshLabels();saveSettings();}));
 SAVE_IDS.forEach(id=>$('#'+id).addEventListener('change',saveSettings));
 
+/* heure de départ : maintenant par défaut, remise à jour à chaque calcul tant qu'on ne l'a pas modifiée */
+setDepNow(); $('#depTime').addEventListener('input',()=>depTouched=true); $('#depNow').onclick=()=>{ setDepNow(); if(state.sim) renderResults(); };
 /* démarrage : liste officielle des bornes en arrière-plan */
 setTimeout(()=>{ updateBaseInfo(); basePromise=loadBase().then(b=>{ updateBaseInfo(); return b; }); },0);
 setTimeout(()=>{ $('#baseBtn').onclick=async()=>{ const b=$('#baseBtn'); b.disabled=true; b.textContent='Téléchargement…'; basePromise=loadBase(true); await basePromise; updateBaseInfo(); b.disabled=false; b.textContent='↻ Mettre à jour la liste des bornes maintenant'; }; },0);
@@ -663,6 +669,7 @@ let busy=false;
 $('#go').onclick=async()=>{
   if(busy) return; busy=true; $('#go').disabled=true;
   document.querySelectorAll('.sugg').forEach(l=>l.style.display='none');
+  if(!depTouched) setDepNow();
   try{
     setStatus('Recherche des adresses…');
     await ensurePlace('from');
@@ -731,6 +738,30 @@ function socAt(c){ // c = {km, idx} sur le profil de base
   const E=state.prof.E, cap=CAR.usable; let soc=settings().soc, last=0;
   for(const st of state.sim.steps){ if(!st.stop) continue; if(st.stop.km>=c.km) break; soc=st.target; last=st.stop.idx; }
   return soc-(E[c.idx]-E[last])/cap*100;
+}
+/* ---- heures ---- */
+var depTouched=false; // var : utilisée dès le démarrage
+function hhmm(d){ return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+function setDepNow(){ $('#depTime').value=hhmm(new Date()); depTouched=false; }
+function depDate(){ const v=$('#depTime').value, d=new Date(); if(v){ const [H,M]=v.split(':'); d.setHours(+H,+M,0,0); } return d; }
+function clock(min){ const d0=depDate(), d=new Date(d0.getTime()+min*60000), days=Math.round((new Date(d).setHours(0,0,0,0)-new Date(d0).setHours(0,0,0,0))/864e5); return hhmm(d)+(days>0?` (+${days} j)`:''); }
+// minutes depuis le départ pour passer devant une borne (route + recharges prévues avant elle)
+function timeAt(c){ if(!state.prof||!state.sim) return 0; let m=state.prof.T[c.idx]; state.sim.steps.forEach(s=>{ if(s.stop&&s.stop.km<c.km-0.1) m+=s.mins; }); return m; }
+// recharge nécessaire à une borne pour aller jusqu'à l'arrivée sans autre arrêt
+function needCharge(c){
+  const s=settings(), E=state.prof.E, cap=CAR.usable, sa=socAt(c);
+  const need=(E[E.length-1]-E[c.idx])/cap*100+s.resDest;
+  if(sa>=need) return {ok:true,sa};
+  const target=Math.min(Math.max(s.maxT,need>s.maxT?100:s.maxT),Math.ceil(need+1)), to=Math.min(target,100);
+  return {ok:false,sa,target:to,mins:chargeMinutes(Math.max(sa,0),to,c.kw),short:need>100};
+}
+function needHtml(c,short){
+  if(!state.prof||!state.sim) return '';
+  const n=needCharge(c), s=settings();
+  if(n.ok) return '✅ pas besoin de recharger pour finir';
+  if(n.short) return `⚡ pour finir : même à 100 % il faudra un autre arrêt (≈ ${fmtDur(n.mins)} jusqu'à 100 %)`;
+  const over=n.mins>s.maxMin?` <span style="color:var(--warn)">(> ta limite de ${s.maxMin} min)</span>`:'';
+  return short?`recharge pour finir ≈ <b>${fmtDur(n.mins)}</b>`:`⚡ pour finir : charger à <b>${Math.round(n.target)} %</b> ≈ <b>${fmtDur(n.mins)}</b>${over}`;
 }
 function nearestIdx(prof,lat,lon){
   const co=prof.coords, cosLat=Math.cos(lat*Math.PI/180); let best=1e18, bi=0;
@@ -820,10 +851,14 @@ function updateNav(ll){
   const soc=socAt({km,idx:i});
   const next=state.chargers.filter(c=>!c.slow&&c.km>km+0.3)[0];
   const stop=state.stops.filter(c=>c.km>km+0.3)[0];
-  let t=`📍 Km <b>${Math.round(km)}</b> / ${Math.round(tot)} · reste ${Math.round(tot-km)} km · 🔋 prévu ici ≈ <b class="pct ${pctClass(soc,settings().resCh)}">${Math.round(soc)} %</b>`;
-  if(next) t+=`<br>⚡ Prochaine borne : <b>${esc(next.name)}</b> (${next.op==='tesla'?'Tesla':'Powerdot'}${next.known?' '+Math.round(next.kw)+' kW':''}) dans <b>${Math.round(next.km-km)} km</b>`;
+  // heures en direct : temps de route restant (profil) + recharges prévues encore devant
+  const T=state.prof.T, now=Date.now(), at=m=>hhmm(new Date(now+m*60000));
+  const chargeAhead=kmMax=>state.sim.steps.filter(s=>s.stop&&s.stop.km>km+0.3&&s.stop.km<kmMax).reduce((a,s)=>a+s.mins,0);
+  const toDest=(T[T.length-1]-T[i])+chargeAhead(1e9);
+  let t=`📍 Km <b>${Math.round(km)}</b> / ${Math.round(tot)} · reste ${Math.round(tot-km)} km · 🔋 prévu ici ≈ <b class="pct ${pctClass(soc,settings().resCh)}">${Math.round(soc)} %</b><br>🏁 Arrivée ≈ <b>${at(toDest)}</b> (dans ${fmtDur(toDest)})`;
+  if(next){ const m=(T[next.idx]-T[i])+chargeAhead(next.km); t+=`<br>⚡ Prochaine borne : <b>${esc(next.name)}</b> (${next.op==='tesla'?'Tesla':'Powerdot'}${next.known?' '+Math.round(next.kw)+' kW':''}) dans <b>${Math.round(next.km-km)} km</b> · ≈ ${at(m)} · ${needHtml(next,true)}`; }
   else t+='<br>⚡ Plus de borne rapide d\'ici l\'arrivée';
-  if(stop&&stop!==next) t+=`<br>🟡 Arrêt prévu : ${esc(stop.name)} dans ${Math.round(stop.km-km)} km`;
+  if(stop&&stop!==next){ const st=state.sim.steps.find(s=>s.stop===stop); t+=`<br>🟡 Arrêt prévu : ${esc(stop.name)} dans ${Math.round(stop.km-km)} km · ≈ ${at((T[stop.idx]-T[i])+chargeAhead(stop.km))}${st?' · recharge ≈ '+fmtDur(st.mins):''}`; }
   nb.innerHTML=t;
 }
 
@@ -837,7 +872,7 @@ function popupHtml(c){
   const on=state.stops.some(s=>s.id===c.id);
   return `<div class="pop"><b>${esc(c.name)}</b>
   <div class="m">${c.op==='tesla'?'Tesla Supercharger':'Powerdot'} · ${c.known?Math.round(c.kw)+' kW':'puissance non renseignée'}${c.cap?' · '+esc(c.cap)+' points':''}<br>
-  Km ${Math.round(c.km)} du trajet · à ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route${c.city?' · '+esc(c.city):''}${c.slow?'<br>Borne lente (AC)':''}${addrHtml(c,true)}<br>🔋 Batterie estimée en passant : <b>${Math.round(socAt(c))} %</b></div>
+  Km ${Math.round(c.km)} du trajet · à ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route${c.city?' · '+esc(c.city):''}${c.slow?'<br>Borne lente (AC)':''}${addrHtml(c,true)}<br>🔋 Batterie estimée en passant : <b>${Math.round(socAt(c))} %</b><br>🕒 Passage ≈ <b>${clock(timeAt(c))}</b><br>${needHtml(c)}</div>
   <button class="btn2" onclick="toggleStop('${c.id}')">${on?'✕ Retirer de mon trajet':'＋ Ajouter à mon trajet'}</button></div>`;
 }
 function drawAll(){
@@ -867,6 +902,7 @@ function renderResults(){
   const total=sim.driveMin+sim.chargeMin;
   let h=`<div class="card"><h2>Résumé</h2>
   <div class="sum"><div><small>Distance</small><b>${Math.round(sim.km)} km</b></div><div><small>Conduite</small><b>${fmtDur(sim.driveMin)}</b></div><div><small>Recharge</small><b>${fmtDur(sim.chargeMin)}</b></div></div>
+  <div class="sum" style="grid-template-columns:1fr 1fr"><div><small>Départ</small><b>${clock(0)}</b></div><div><small>🏁 Arrivée prévue</small><b>${clock(total)}</b></div></div>
   <div class="sum"><div><small>Total</small><b>${fmtDur(total)}</b></div><div><small>Arrêts</small><b>${state.stops.length}</b></div><div><small>Arrivée</small><b class="pct ${pctClass(sim.arrive,s.resDest)}">${Math.round(sim.arrive)} %</b></div></div>`;
   const tk=tollKm(state.route);
   h+=`<div class="sum" style="grid-template-columns:1fr"><div><small>Péage estimé</small><b>${tk>1?'≈ '+euros(tollCost(tk))+' <small style="display:inline">('+Math.round(tk)+' km payants)</small>':'Aucun péage'}</b></div></div>`;
@@ -877,11 +913,13 @@ function renderResults(){
   if(state.planError) h+=`<div class="alert bad">${esc(state.planError)}</div>`;
   sim.warns.forEach(w=>h+=`<div class="alert ${w.lvl}">${esc(w.t)}</div>`);
   if(!state.chargers.length&&!state.planError) h+=`<div class="alert info">Aucune borne Tesla/Powerdot trouvée à moins de ${$('#radius').value} km de la route. Élargis l'écart dans les réglages.</div>`;
-  h+=`<ul class="tl"><li><div class="ico" style="background:var(--ok);color:#fff">A</div><div class="t">${esc(state.from.label)}</div><div class="s">Départ avec <span class="pct ok">${s.soc} %</span></div></li>`;
+  h+=`<ul class="tl"><li><div class="ico" style="background:var(--ok);color:#fff">A</div><div class="t">${esc(state.from.label)}</div><div class="s">Départ à <b>${clock(0)}</b> avec <span class="pct ok">${s.soc} %</span></div></li>`;
+  let tt=0; // minutes écoulées depuis le départ
   sim.steps.forEach((st,i)=>{
+    tt+=st.legMin; const tArr=tt; if(st.stop) tt+=st.mins;
     h+=`<li class="leg">${Math.round(st.legKm)} km · ${fmtDur(st.legMin)} · −${Math.round(st.used)} %</li>`;
     if(st.via){
-      h+=`<li><div class="ico" style="background:#9b6bff;color:#fff">E</div><div class="t">${esc(st.via.name)}</div><div class="s">Étape · arrivée avec <span class="pct ${pctClass(st.arrive,s.resCh)}">${Math.round(st.arrive)} %</span></div></li>`;
+      h+=`<li><div class="ico" style="background:#9b6bff;color:#fff">E</div><div class="t">${esc(st.via.name)}</div><div class="s">Étape · <b>${clock(tArr)}</b> · arrivée avec <span class="pct ${pctClass(st.arrive,s.resCh)}">${Math.round(st.arrive)} %</span></div></li>`;
     }
     if(st.stop){
       const c=st.stop;
@@ -889,19 +927,19 @@ function renderResults(){
       <div class="t">${esc(c.name)}</div>
       <div class="s">${c.op==='tesla'?'Tesla':'Powerdot'} · ${c.known?Math.round(c.kw)+' kW':'≈'+Math.round(c.kw)+' kW (non renseigné)'} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route</div>
       ${addrHtml(c)}
-      <div class="s">Arrivée <span class="pct ${pctClass(st.arrive,s.resCh)}">${Math.round(st.arrive)} %</span> → charger à <span class="pct ok">${Math.round(st.target)} %</span> · ≈ ${fmtDur(st.mins)}</div>
+      <div class="s">🕒 Arrivée <b>${clock(tArr)}</b> avec <span class="pct ${pctClass(st.arrive,s.resCh)}">${Math.round(st.arrive)} %</span> → charger à <span class="pct ok">${Math.round(st.target)} %</span> · ≈ ${fmtDur(st.mins)} → reprise de la route <b>${clock(tt)}</b></div>
       <div class="acts"><a class="btn2" target="_blank" rel="noopener" href="https://waze.com/ul?ll=${c.lat},${c.lon}&navigate=yes">Waze</a><button class="btn2" onclick="toggleStop('${c.id}')">✕ Retirer</button></div></li>`;
     }
   });
-  h+=`<li><div class="ico" style="background:var(--acc);color:#fff">B</div><div class="t">${esc(state.to.label)}</div><div class="s">Arrivée avec <span class="pct ${pctClass(sim.arrive,s.resDest)}">${Math.round(sim.arrive)} %</span></div></li></ul>
+  h+=`<li><div class="ico" style="background:var(--acc);color:#fff">B</div><div class="t">${esc(state.to.label)}</div><div class="s">🏁 Arrivée <b>${clock(tt)}</b> avec <span class="pct ${pctClass(sim.arrive,s.resDest)}">${Math.round(sim.arrive)} %</span></div></li></ul>
   <div class="acts" style="margin-top:10px"><a class="btn2" target="_blank" rel="noopener" href="${gmapsUrl()}">Ouvrir dans Google Maps</a>${state.chargers.length?'<button class="btn2" onclick="replan()">↻ Arrêts automatiques</button>':''}<button class="btn2" onclick="resim()">↻ Recalculer batterie</button></div></div>`;
 
   if(state.chargers.length){
     h+=`<div class="card"><details open><summary>Toutes les bornes sur le trajet (${state.chargers.length})</summary>`;
     if(state.widened) h+=`<div class="alert info" style="margin-top:8px">Peu de bornes à moins de ${$('#radius').value} km : affichage élargi jusqu'à ${state.widened} km de la route.</div>`;
-    h+=`<div class="foot" style="margin-top:6px">Touche + pour t'y arrêter. Le % est la batterie estimée en passant devant.</div><ul class="clist">`;
+    h+=`<div class="foot" style="margin-top:6px">Touche + pour t'y arrêter. Le % est la batterie estimée en passant devant ; « pour finir » = recharge nécessaire si tu t'arrêtes là pour aller jusqu'au bout sans autre arrêt.</div><ul class="clist">`;
     state.chargers.forEach(c=>{ const on=state.stops.some(x=>x.id===c.id), sa=socAt(c);
-      h+=`<li><span class="dot" style="background:${c.op==='tesla'?'var(--tesla)':'var(--pd)'}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>Km ${Math.round(c.km)} · ${c.known?Math.round(c.kw)+' kW':'kW ?'} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route · 🔋 <b class="pct ${pctClass(sa,settings().resCh)}">${Math.round(sa)} %</b></span>${addrHtml(c)}</div><button class="add ${on?'on':''}" onclick="toggleStop('${c.id}')">${on?'✓':'+'}</button></li>`; });
+      h+=`<li><span class="dot" style="background:${c.op==='tesla'?'var(--tesla)':'var(--pd)'}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>Km ${Math.round(c.km)} · ${c.known?Math.round(c.kw)+' kW':'kW ?'} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route · 🔋 <b class="pct ${pctClass(sa,settings().resCh)}">${Math.round(sa)} %</b></span><span class="addr">🕒 Passage ≈ <b>${clock(timeAt(c))}</b> · ${needHtml(c)}</span>${addrHtml(c)}</div><button class="add ${on?'on':''}" onclick="toggleStop('${c.id}')">${on?'✓':'+'}</button></li>`; });
     h+=`</ul></details></div>`;
   }
   h+=`<div class="foot">Estimations : consommation calculée selon la vitesse de chaque tronçon (sans dénivelé), temps de charge selon une courbe type Model 3 LFP. Péage : km payants × tarif moyen réglable (≈ 0,11 €/km sur le réseau ASF en 2026), à ±15 % près ; tarifs réels sur vinci-autoroutes.com. Bornes : liste officielle nationale IRVE${state.src&&state.src.osm?' + OpenStreetMap':' (OpenStreetMap indisponible pour ce calcul)'} ; certaines peuvent manquer ou être mal renseignées, et l'occupation en temps réel n'est pas connue — vérifie dans l'app Tesla avant de partir.${state.noToll?' <b>Sans péage :</b> active aussi « Éviter les péages » dans Google Maps / Waze, le lien ne transmet pas ce réglage.':''}</div>`;
