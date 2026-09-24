@@ -89,13 +89,15 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
 #navbar{position:absolute;z-index:600;left:54px;right:54px;top:10px;background:rgba(15,17,21,.93);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:14px;line-height:1.45}
 .me{width:34px;height:34px;display:flex;align-items:center;justify-content:center}
 .mearrow{width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-bottom:26px solid #3e8bff;filter:drop-shadow(0 0 2px #fff) drop-shadow(0 1px 3px rgba(0,0,0,.6))}
+.addr{display:block;font-size:12px;color:#b9c1ce;margin-top:2px}
+.addr a{color:#7fb2ff;text-decoration:none}
 .slowtag{font-size:11px;background:#39404d;color:#cfd5df;border-radius:5px;padding:1px 5px;margin-left:4px}
 </style>
 </head>
 <body>
 <header>
   <h1>Trajet <span>Model 3</span> ⚡</h1>
-  <div class="ver">v.24/09/2026 12:54</div>
+  <div class="ver">v.24/09/2026 15:00</div>
 </header>
 
 <div class="layout">
@@ -407,7 +409,7 @@ function legEnergy(leg){
 /* ================== LISTE OFFICIELLE DES BORNES (base nationale IRVE) ==================
    Téléchargée une fois (Tesla + Powerdot de toute la France), gardée sur l'appareil 7 jours (et partagée via Firebase si configuré).
    => les bornes s'affichent même quand les serveurs OpenStreetMap sont saturés. */
-const BASE_KEY='bornesFR_v1', BASE_TTL=7*864e5; // 7 jours
+const BASE_KEY='bornesFR_v2', BASE_TTL=7*864e5; // 7 jours
 
 /* ================== FIREBASE : liste partagée entre tous tes appareils ==================
    ⚙️ Colle ici la config de ton projet Firebase (Console > Paramètres du projet > Tes applications > Config).
@@ -451,7 +453,7 @@ function groupBase(rows,f){
     let kw=parseFloat(r[f.kw])||0; if(kw>1000) kw/=1000;
     const key=(r[f.id]||'')+'|'+lat.toFixed(3)+','+lon.toFixed(3), e=m.get(key);
     if(e){ e[3]=Math.max(e[3],kw); e[5]++; }
-    else m.set(key,[+lat.toFixed(5),+lon.toFixed(5),op,kw,String(r[f.st]||'').slice(0,60),1,String(r[f.city]||'').slice(0,40)]);
+    else m.set(key,[+lat.toFixed(5),+lon.toFixed(5),op,kw,String(r[f.st]||'').slice(0,60),1,String(r[f.city]||'').slice(0,40),String(r[f.addr]||'').replace(/\s+/g,' ').trim().slice(0,90)]);
   }
   return [...m.values()];
 }
@@ -464,7 +466,7 @@ async function downloadBase(){
       const find=(...res)=>{ for(const re of res){ const x=F.find(f=>re.test(f.name)); if(x) return x.name; } };
       const f={ op:find(/^nom_operateur$/,/operateur/), en:find(/^nom_enseigne$/,/enseigne/), st:find(/^nom_station$/,/station$/),
         id:find(/^id_station_itinerance$/,/id_station/), kw:find(/^puissance_nominale$/,/puissance/),
-        geo:(F.find(x=>x.type==='geo_point_2d')||{}).name, xy:find(/coordonnees/i), city:find(/^consolidated_commune$/,/^commune$/,/commune/) };
+        geo:(F.find(x=>x.type==='geo_point_2d')||{}).name, xy:find(/coordonnees/i), city:find(/^consolidated_commune$/,/^commune$/,/commune/), addr:find(/^adresse_station$/,/adresse/) };
       if(!f.kw||!(f.geo||f.xy)||!(f.op||f.en)) throw new Error('format inattendu');
       const sel=[...new Set(Object.values(f).filter(Boolean))].join(',');
       const rows=await fetchT(`${api}/exports/json?select=${encodeURIComponent(sel)}&where=${encodeURIComponent('"tesla" OR "powerdot" OR "power dot"')}`,60000);
@@ -497,8 +499,8 @@ function updateBaseInfo(){
     :'📋 Liste officielle des bornes : pas encore téléchargée (elle le sera au prochain calcul).';
 }
 function fromBase(a){
-  const [lat,lon,o,kw,name,n,city]=a, op=o===0?'tesla':'powerdot';
-  return {id:'b'+lat+','+lon,op,lat,lon,kw:kw||(op==='tesla'?150:50),known:kw>0,slow:kw>0&&kw<40,name:name||(op==='tesla'?'Tesla Supercharger':'Powerdot'),cap:n?String(n):'',city:city||'',hours:''};
+  const [lat,lon,o,kw,name,n,city,addr]=a, op=o===0?'tesla':'powerdot';
+  return {id:'b'+lat+','+lon,op,lat,lon,kw:kw||(op==='tesla'?150:50),known:kw>0,slow:kw>0&&kw<40,name:name||(op==='tesla'?'Tesla Supercharger':'Powerdot'),cap:n?String(n):'',city:city||'',addr:addr||'',hours:''};
 }
 function routeBox(prof,km){
   let a=90,b=180,c=-90,d=-180; for(const [lo,la] of prof.coords){ if(la<a)a=la; if(la>c)c=la; if(lo<b)b=lo; if(lo>d)d=lo; }
@@ -563,7 +565,8 @@ function parseCharger(el){
   const known=kw>0; if(!kw) kw=op==='tesla'?150:50;
   return { id:el.type+el.id, op, lat, lon, kw, known, slow,
     name:t.name||(op==='tesla'?'Tesla Supercharger':'Powerdot'),
-    cap:t.capacity||'', city:t['addr:city']||'', hours:t.opening_hours||'' };
+    cap:t.capacity||'', city:t['addr:city']||'', hours:t.opening_hours||'',
+    addr:[[t['addr:housenumber'],t['addr:street']].filter(Boolean).join(' '),[t['addr:postcode'],t['addr:city']].filter(Boolean).join(' ')].filter(Boolean).join(', ') };
 }
 function dedupe(list){
   const out=[]; list.forEach(c=>{ const dup=out.find(o=>o.op===c.op&&hav([o.lon,o.lat],[c.lon,c.lat])<120); if(dup){ if(c.known&&(!dup.known||c.kw>dup.kw)){ dup.kw=c.kw; dup.known=true; } if(!dup.cap&&c.cap) dup.cap=c.cap; } else out.push(c); }); return out;
@@ -732,6 +735,11 @@ function nearestIdx(prof,lat,lon){
   return {i:bi, off:Math.sqrt(best)*111.32};
 }
 
+function addrHtml(c,br){
+  const a=c.addr||c.city; if(!a) return '';
+  const link=`https://waze.com/ul?ll=${c.lat},${c.lon}&navigate=yes`;
+  return (br?'<br>':'<span class="addr">')+`📍 ${esc(a)} · <a href="${link}" target="_blank" rel="noopener">Waze</a>`+(br?'':'</span>');
+}
 /* ================== MODE GPS (position qui suit le trajet) ================== */
 let watchId=null, meMk=null, meAcc=null, follow=true, wakeLock=null, lastPos=null, heading=0;
 function meIcon(hd){ return L.divIcon({className:'',html:`<div class="me" style="transform:rotate(${hd}deg)"><div class="mearrow"></div></div>`,iconSize:[34,34],iconAnchor:[17,17]}); }
@@ -743,15 +751,35 @@ async function gpsClick(){
     if(meMk){ map.removeLayer(meMk); map.removeLayer(meAcc); meMk=null; }
     $('#navbar').classList.add('hide'); try{ wakeLock&&wakeLock.release(); }catch(e){} wakeLock=null; gpsLabel(); return;
   }
-  if(!navigator.geolocation){ setStatus('GPS indisponible sur cet appareil',true); return; }
-  follow=true;
+  const nb=$('#navbar'); nb.classList.remove('hide');
+  if(!window.isSecureContext){ nb.innerHTML='⚠️ GPS : il ne fonctionne qu\'en <b>https</b>. Ouvre l\'app depuis ton adresse GitHub Pages (https://…github.io/…), pas comme fichier.'; return; }
+  if(!navigator.geolocation){ nb.innerHTML='⚠️ GPS : ce navigateur ne donne pas accès à la position. Utilise l\'app sur l\'iPhone pour le suivi GPS.'; return; }
+  follow=true; gotFix=false; hiAcc=true;
   try{ if('wakeLock' in navigator) wakeLock=await navigator.wakeLock.request('screen'); }catch(e){}
-  watchId=navigator.geolocation.watchPosition(onPos,()=>{ setStatus('Position indisponible : autorise la localisation pour ce site dans le navigateur.',true); },{enableHighAccuracy:true,maximumAge:2000,timeout:20000});
-  $('#navbar').classList.remove('hide'); $('#navbar').textContent='Recherche de ta position…'; gpsLabel();
+  nb.textContent='📡 Recherche de ta position… (accepte la demande de localisation si elle s\'affiche)';
+  navigator.geolocation.getCurrentPosition(onPos,()=>{}, {enableHighAccuracy:false,maximumAge:120000,timeout:15000}); // 1re position rapide
+  startWatch(); gpsLabel();
+  setTimeout(()=>{ if(watchId!==null&&!gotFix) nb.innerHTML='📡 Toujours pas de position après 30 s… Vérifie que la localisation est autorisée pour ce site. Le suivi continue d\'essayer.'; },30000);
+}
+let gotFix=false, hiAcc=true;
+function startWatch(){
+  if(watchId!==null) navigator.geolocation.clearWatch(watchId);
+  watchId=navigator.geolocation.watchPosition(onPos,gpsError,{enableHighAccuracy:hiAcc,maximumAge:3000,timeout:30000});
+}
+function gpsError(e){
+  const nb=$('#navbar');
+  if(e.code===1){ // refusé : on arrête
+    navigator.geolocation.clearWatch(watchId); watchId=null; gpsLabel();
+    nb.innerHTML='⚠️ GPS refusé. <b>iPhone</b> : Réglages → Confidentialité → Service de localisation → Safari → « Lorsque l\'app est active », puis recharge la page. <b>Tesla / PC</b> : autorise la position pour ce site (icône à gauche de l\'adresse), puis réessaie.';
+    return;
+  }
+  if(hiAcc){ hiAcc=false; startWatch(); } // GPS précis indisponible : on passe en position approximative
+  if(!gotFix) nb.innerHTML='📡 '+(e.code===2?'Position indisponible pour l\'instant':'La position met du temps à arriver')+'… nouvel essai en cours.';
 }
 $('#gpsBtn').onclick=gpsClick;
 map.on('dragstart',()=>{ if(watchId!==null&&follow){ follow=false; gpsLabel(); } });
 function onPos(p){
+  gotFix=true;
   const ll=[p.coords.latitude,p.coords.longitude];
   let hd=p.coords.heading;
   if((hd==null||isNaN(hd))&&lastPos){ const dy=ll[0]-lastPos[0], dx=(ll[1]-lastPos[1])*Math.cos(ll[0]*Math.PI/180); if(Math.hypot(dx,dy)>0.00005) hd=(Math.atan2(dx,dy)*180/Math.PI+360)%360; }
@@ -788,7 +816,7 @@ function popupHtml(c){
   const on=state.stops.some(s=>s.id===c.id);
   return `<div class="pop"><b>${esc(c.name)}</b>
   <div class="m">${c.op==='tesla'?'Tesla Supercharger':'Powerdot'} · ${c.known?Math.round(c.kw)+' kW':'puissance non renseignée'}${c.cap?' · '+esc(c.cap)+' points':''}<br>
-  Km ${Math.round(c.km)} du trajet · à ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route${c.city?' · '+esc(c.city):''}${c.slow?'<br>Borne lente (AC)':''}<br>🔋 Batterie estimée en passant : <b>${Math.round(socAt(c))} %</b></div>
+  Km ${Math.round(c.km)} du trajet · à ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route${c.city?' · '+esc(c.city):''}${c.slow?'<br>Borne lente (AC)':''}${addrHtml(c,true)}<br>🔋 Batterie estimée en passant : <b>${Math.round(socAt(c))} %</b></div>
   <button class="btn2" onclick="toggleStop('${c.id}')">${on?'✕ Retirer de mon trajet':'＋ Ajouter à mon trajet'}</button></div>`;
 }
 function drawAll(){
@@ -839,6 +867,7 @@ function renderResults(){
       h+=`<li><div class="ico" style="background:var(--stop)">${st.no}</div>
       <div class="t">${esc(c.name)}</div>
       <div class="s">${c.op==='tesla'?'Tesla':'Powerdot'} · ${c.known?Math.round(c.kw)+' kW':'≈'+Math.round(c.kw)+' kW (non renseigné)'} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route</div>
+      ${addrHtml(c)}
       <div class="s">Arrivée <span class="pct ${pctClass(st.arrive,s.resCh)}">${Math.round(st.arrive)} %</span> → charger à <span class="pct ok">${Math.round(st.target)} %</span> · ≈ ${fmtDur(st.mins)}</div>
       <div class="acts"><a class="btn2" target="_blank" rel="noopener" href="https://waze.com/ul?ll=${c.lat},${c.lon}&navigate=yes">Waze</a><button class="btn2" onclick="toggleStop('${c.id}')">✕ Retirer</button></div></li>`;
     }
@@ -851,7 +880,7 @@ function renderResults(){
     if(state.widened) h+=`<div class="alert info" style="margin-top:8px">Peu de bornes à moins de ${$('#radius').value} km : affichage élargi jusqu'à ${state.widened} km de la route.</div>`;
     h+=`<div class="foot" style="margin-top:6px">Touche + pour t'y arrêter. Le % est la batterie estimée en passant devant.</div><ul class="clist">`;
     state.chargers.forEach(c=>{ const on=state.stops.some(x=>x.id===c.id), sa=socAt(c);
-      h+=`<li><span class="dot" style="background:${c.op==='tesla'?'var(--tesla)':'var(--pd)'}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>Km ${Math.round(c.km)} · ${c.known?Math.round(c.kw)+' kW':'kW ?'} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route · 🔋 <b class="pct ${pctClass(sa,settings().resCh)}">${Math.round(sa)} %</b></span></div><button class="add ${on?'on':''}" onclick="toggleStop('${c.id}')">${on?'✓':'+'}</button></li>`; });
+      h+=`<li><span class="dot" style="background:${c.op==='tesla'?'var(--tesla)':'var(--pd)'}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>Km ${Math.round(c.km)} · ${c.known?Math.round(c.kw)+' kW':'kW ?'} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route · 🔋 <b class="pct ${pctClass(sa,settings().resCh)}">${Math.round(sa)} %</b></span>${addrHtml(c)}</div><button class="add ${on?'on':''}" onclick="toggleStop('${c.id}')">${on?'✓':'+'}</button></li>`; });
     h+=`</ul></details></div>`;
   }
   h+=`<div class="foot">Estimations : consommation calculée selon la vitesse de chaque tronçon (sans dénivelé), temps de charge selon une courbe type Model 3 LFP. Péage : km payants × tarif moyen réglable (≈ 0,11 €/km sur le réseau ASF en 2026), à ±15 % près ; tarifs réels sur vinci-autoroutes.com. Bornes : liste officielle nationale IRVE${state.src&&state.src.osm?' + OpenStreetMap':' (OpenStreetMap indisponible pour ce calcul)'} ; certaines peuvent manquer ou être mal renseignées, et l'occupation en temps réel n'est pas connue — vérifie dans l'app Tesla avant de partir.${state.noToll?' <b>Sans péage :</b> active aussi « Éviter les péages » dans Google Maps / Waze, le lien ne transmet pas ce réglage.':''}</div>`;
