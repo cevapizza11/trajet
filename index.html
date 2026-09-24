@@ -84,8 +84,13 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
 .pinV{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;border:2px solid #fff;background:#9b6bff}
 .foot{font-size:11px;color:var(--mut);line-height:1.5}
 .hide{display:none!important}
+body.navmode #mapwrap{position:fixed;left:0;right:0;bottom:0;top:49px;height:auto;z-index:900}
+body.navmode{overflow:hidden}
 .gpsbtn{position:absolute;z-index:600;right:10px;bottom:22px;border:0;border-radius:24px;padding:12px 16px;font-weight:800;font-size:15px;background:#fff;color:#111;box-shadow:0 2px 8px rgba(0,0,0,.5);cursor:pointer}
 .gpsbtn.on{background:var(--acc);color:#fff}
+.seg{position:absolute;z-index:600;right:10px;bottom:80px;display:flex;border-radius:24px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.5)}
+.seg button{border:0;padding:11px 14px;font-weight:800;font-size:15px;background:#fff;color:#111;cursor:pointer;touch-action:manipulation}
+.seg button.on{background:var(--acc);color:#fff}
 #navbar{position:absolute;z-index:600;left:54px;right:54px;top:10px;background:rgba(15,17,21,.93);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:14px;line-height:1.45}
 .me{width:34px;height:34px;display:flex;align-items:center;justify-content:center}
 .mearrow{width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-bottom:26px solid #3e8bff;filter:drop-shadow(0 0 2px #fff) drop-shadow(0 1px 3px rgba(0,0,0,.6))}
@@ -97,7 +102,7 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
 <body>
 <header>
   <h1>Trajet <span>Model 3</span> ⚡</h1>
-  <div class="ver">v.24/09/2026 16:21</div>
+  <div class="ver">v.24/09/2026 16:55</div>
 </header>
 
 <div class="layout">
@@ -209,7 +214,7 @@ details summary{cursor:pointer;font-weight:700;padding:4px 0}
     <div id="map"></div>
     <div id="navbar" class="hide"></div>
     <button class="gpsbtn" id="gpsBtn">➤ GPS</button>
-    <button class="gpsbtn hide" id="orientBtn" style="bottom:78px">⬆ Sens de la route</button>
+    <div class="seg hide" id="orientSeg"><button id="oRoute">⬆ Route</button><button id="oNord">🧭 Nord</button></div>
     <div class="legend">
       <div><span class="dot" style="background:var(--tesla)"></span>Tesla</div>
       <div><span class="dot" style="background:var(--pd)"></span>Powerdot</div>
@@ -775,19 +780,23 @@ function addrHtml(c,br){
   return (br?'<br>':'<span class="addr">')+`📍 ${esc(a)} · <a href="${link}" target="_blank" rel="noopener">Waze</a>`+(br?'':'</span>');
 }
 /* ================== MODE GPS (position qui suit le trajet) ================== */
-let headingUp=true, smoothHd=0, hdRef=null;
+let headingUp=true, smoothHd=0, hdRef=null, prevFix=null, curSpeed=null;
+function distM(a,b){ const dy=(b[0]-a[0])*111320, dx=(b[1]-a[1])*111320*Math.cos(a[0]*Math.PI/180); return Math.hypot(dx,dy); }
+function bearingDeg(a,b){ const dy=b[0]-a[0], dx=(b[1]-a[1])*Math.cos(a[0]*Math.PI/180); return (Math.atan2(dx,dy)*180/Math.PI+360)%360; }
 function setMapBearing(b){ if(CAN_ROTATE) map.setBearing(b); }
 function mapBearing(){ return CAN_ROTATE?(map.getBearing?map.getBearing():0):0; }
-$('#orientBtn').onclick=()=>{ headingUp=!headingUp; if(!headingUp) setMapBearing(0); else if(lastPos) smoothHd=heading; gpsLabel(); };
+function setOrient(up){ headingUp=up; if(!up) setMapBearing(0); else { smoothHd=heading; setMapBearing(-heading); } gpsLabel(); if(lastPos&&follow) map.panTo(lastPos); }
+$('#oRoute').onclick=()=>setOrient(true); $('#oNord').onclick=()=>setOrient(false);
 let watchId=null, meMk=null, meAcc=null, follow=true, wakeLock=null, lastPos=null, heading=0;
 function meIcon(hd){ return L.divIcon({className:'',html:`<div class="me" style="transform:rotate(${hd}deg)"><div class="mearrow"></div></div>`,iconSize:[34,34],iconAnchor:[17,17]}); }
-function gpsLabel(){ $('#orientBtn').classList.toggle('hide',watchId===null||!CAN_ROTATE); $('#orientBtn').textContent=headingUp?'⬆ Sens de la route':'🧭 Nord en haut'; const b=$('#gpsBtn'); if(watchId===null){ b.textContent='➤ GPS'; b.classList.remove('on'); } else { b.classList.add('on'); b.textContent=follow?'■ Arrêter GPS':'⌖ Recentrer'; } }
+function gpsLabel(){ $('#orientSeg').classList.toggle('hide',watchId===null||!CAN_ROTATE); $('#oRoute').classList.toggle('on',headingUp); $('#oNord').classList.toggle('on',!headingUp); const b=$('#gpsBtn'); if(watchId===null){ b.textContent='➤ GPS'; b.classList.remove('on'); } else { b.classList.add('on'); b.textContent=follow?'■ Arrêter GPS':'⌖ Recentrer'; } }
 async function gpsClick(){
   if(watchId!==null&&!follow){ follow=true; if(lastPos) map.setView(lastPos,Math.max(map.getZoom(),14)); gpsLabel(); return; }
   if(watchId!==null){ // arrêt
     navigator.geolocation.clearWatch(watchId); watchId=null;
     if(meMk){ map.removeLayer(meMk); map.removeLayer(meAcc); meMk=null; }
-    setMapBearing(0); $('#orientBtn').classList.add('hide');
+    setMapBearing(0); $('#orientSeg').classList.add('hide');
+    $('#mapwrap').style.top=''; document.body.classList.remove('navmode'); setTimeout(()=>map.invalidateSize(),50);
     $('#navbar').classList.add('hide'); try{ wakeLock&&wakeLock.release(); }catch(e){} wakeLock=null; gpsLabel(); return;
   }
   const nb=$('#navbar'); nb.classList.remove('hide');
@@ -798,6 +807,7 @@ async function gpsClick(){
   nb.textContent='📡 Recherche de ta position… (accepte la demande de localisation si elle s\'affiche)';
   navigator.geolocation.getCurrentPosition(onPos,()=>{}, {enableHighAccuracy:false,maximumAge:120000,timeout:15000}); // 1re position rapide
   startWatch(); gpsLabel();
+  $('#mapwrap').style.top=document.querySelector('header').getBoundingClientRect().bottom+'px'; document.body.classList.add('navmode'); setTimeout(()=>map.invalidateSize(),50); // carte plein écran pendant la conduite
   setTimeout(()=>{ if(watchId!==null&&!gotFix) nb.innerHTML='📡 Toujours pas de position après 30 s… Vérifie que la localisation est autorisée pour ce site. Le suivi continue d\'essayer.'; },30000);
 }
 let gotFix=false, hiAcc=true;
@@ -809,6 +819,7 @@ function gpsError(e){
   const nb=$('#navbar');
   if(e.code===1){ // refusé : on arrête
     navigator.geolocation.clearWatch(watchId); watchId=null; gpsLabel();
+    $('#mapwrap').style.top=''; document.body.classList.remove('navmode'); setTimeout(()=>map.invalidateSize(),50);
     nb.innerHTML='⚠️ GPS refusé. <b>iPhone</b> : Réglages → Confidentialité → Service de localisation → Safari → « Lorsque l\'app est active », puis recharge la page. <b>Tesla / PC</b> : autorise la position pour ce site (icône à gauche de l\'adresse), puis réessaie.';
     return;
   }
@@ -820,15 +831,19 @@ map.on('dragstart',()=>{ if(watchId!==null&&follow){ follow=false; gpsLabel(); }
 function onPos(p){
   gotFix=true;
   const ll=[p.coords.latitude,p.coords.longitude];
-  // cap : celui du GPS si on roule (> 7 km/h), sinon calculé entre 2 positions distantes d'au moins 12 m
-  let hd=null; const spd=p.coords.speed;
-  if(p.coords.heading!=null&&!isNaN(p.coords.heading)&&(spd==null||spd>2)) hd=p.coords.heading;
-  if(hd==null&&hdRef){ const dy=ll[0]-hdRef[0], dx=(ll[1]-hdRef[1])*Math.cos(ll[0]*Math.PI/180); if(Math.hypot(dx,dy)*111320>12){ hd=(Math.atan2(dx,dy)*180/Math.PI+360)%360; hdRef=ll; } }
-  if(!hdRef) hdRef=ll; else if(hd!=null) hdRef=ll;
+  // --- cap fiable : la carte ne tourne que si on roule vraiment (sinon le GPS « tremble » et la carte part dans tous les sens)
+  const acc=p.coords.accuracy||50, tNow=p.timestamp||Date.now();
+  let spd=(p.coords.speed!=null&&p.coords.speed>=0)?p.coords.speed:null; // iPhone : -1 = vitesse inconnue
+  if(spd==null&&prevFix){ const dt=(tNow-prevFix.t)/1000; if(dt>0.5) spd=distM(prevFix.ll,ll)/dt; }
+  prevFix={ll,t:tNow}; curSpeed=spd;
+  let hd=null; const gh=p.coords.heading;
+  if(gh!=null&&!isNaN(gh)&&gh>=0&&spd!=null&&spd>=2.5) hd=gh; // cap du GPS au-dessus de ~9 km/h (iPhone : -1 = cap inconnu)
+  if(hd==null&&hdRef&&acc<=40){ const d=distM(hdRef,ll); if(d>Math.max(25,2*acc)) hd=bearingDeg(hdRef,ll); } // sinon : direction entre 2 points éloignés
+  if(!hdRef||hd!=null) hdRef=ll;
   if(hd!=null) heading=hd;
   lastPos=ll;
-  // orientation de la carte : cap lissé pour éviter les à-coups
-  if(headingUp&&CAN_ROTATE){ const d=((heading-smoothHd+540)%360)-180; smoothHd=(smoothHd+d*0.6+360)%360; setMapBearing(-smoothHd); }
+  // orientation de la carte : seulement avec un cap valide, lissé pour éviter les à-coups
+  if(headingUp&&CAN_ROTATE&&hd!=null){ const d=((heading-smoothHd+540)%360)-180; smoothHd=(smoothHd+d*0.6+360)%360; setMapBearing(-smoothHd); }
   const arrow=(heading+mapBearing()+360)%360; // la flèche est dessinée par rapport à l'écran
   if(!meMk){ meAcc=L.circle(ll,{radius:p.coords.accuracy||20,color:'#3e8bff',weight:1,fillOpacity:.08,interactive:false}).addTo(map); meMk=L.marker(ll,{icon:meIcon(arrow),zIndexOffset:3000,interactive:false}).addTo(map); }
   else { meMk.setLatLng(ll); meMk.setIcon(meIcon(arrow)); meAcc.setLatLng(ll).setRadius(p.coords.accuracy||20); }
@@ -859,6 +874,7 @@ function updateNav(ll){
   if(next){ const m=(T[next.idx]-T[i])+chargeAhead(next.km); t+=`<br>⚡ Prochaine borne : <b>${esc(next.name)}</b> (${next.op==='tesla'?'Tesla':'Powerdot'}${next.known?' '+Math.round(next.kw)+' kW':''}) dans <b>${Math.round(next.km-km)} km</b> · ≈ ${at(m)} · ${needHtml(next,true)}`; }
   else t+='<br>⚡ Plus de borne rapide d\'ici l\'arrivée';
   if(stop&&stop!==next){ const st=state.sim.steps.find(s=>s.stop===stop); t+=`<br>🟡 Arrêt prévu : ${esc(stop.name)} dans ${Math.round(stop.km-km)} km · ≈ ${at((T[stop.idx]-T[i])+chargeAhead(stop.km))}${st?' · recharge ≈ '+fmtDur(st.mins):''}`; }
+  t+=`<br><span style="font-size:12px;color:var(--mut)">🧭 ${curSpeed!=null?Math.round(curSpeed*3.6)+' km/h':'vitesse ?'} · cap ${Math.round(heading)}°${headingUp&&(curSpeed==null||curSpeed<2.5)?' · carte figée tant que tu ne roules pas':''}</span>`;
   nb.innerHTML=t;
 }
 
