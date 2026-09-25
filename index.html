@@ -180,7 +180,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.25/09/2026 07:12</div>
+  <div class="ver">v.25/09/2026 07:34</div>
 </header>
 
 <div class="layout">
@@ -453,14 +453,16 @@ async function ensurePlace(key){
 /* ================== ITINÉRAIRE (OSRM) ================== */
 async function osrm(points,noToll){
   if(noToll===undefined) noToll=$('#noToll').checked;
-  if(noToll) return valhalla(points); // OSRM ne sait pas éviter les péages -> Valhalla
+  if(noToll) return valhalla(points,0); // OSRM ne sait pas éviter les péages -> Valhalla
+  try{ return await valhalla(points,0.5); } // Valhalla indique les tronçons à péage (prix estimé fiable)
+  catch(e){ console.warn('Valhalla indisponible, secours OSRM :',e.message); }
   const c=points.map(p=>(+p.lon).toFixed(6)+','+(+p.lat).toFixed(6)).join(';');
   const q='?overview=full&geometries=geojson&annotations=distance,duration&steps=true';
   let lastErr;
   for(const base of OSRM_SERVERS){
     try{
       const r=await fetch(base+c+q); const j=await r.json().catch(()=>({}));
-      if(r.ok&&j.code==='Ok'&&j.routes&&j.routes.length) return j.routes[0];
+      if(r.ok&&j.code==='Ok'&&j.routes&&j.routes.length){ j.routes[0].src='osrm'; return j.routes[0]; }
       if(j.code==='NoRoute'){ lastErr=new Error('Aucun itinéraire trouvé'); break; }
       lastErr=new Error('Serveur d’itinéraire indisponible ('+(j.message||j.code||r.status)+')');
     }catch(e){ lastErr=new Error('Serveur d’itinéraire injoignable, réessaie dans un instant'); }
@@ -478,8 +480,9 @@ function decode6(str){
   }
   return out;
 }
-async function valhalla(points){
-  const body={locations:points.map(p=>({lat:+p.lat,lon:+p.lon,type:'break'})),costing:'auto',costing_options:{auto:{use_tolls:0}},units:'kilometers',language:'fr-FR'};
+async function valhalla(points,useTolls){
+  if(useTolls===undefined) useTolls=0;
+  const body={locations:points.map(p=>({lat:+p.lat,lon:+p.lon,type:'break'})),costing:'auto',costing_options:{auto:{use_tolls:useTolls}},units:'kilometers',language:'fr-FR'};
   let r,j;
   try{ r=await fetch(VALHALLA+'?json='+encodeURIComponent(JSON.stringify(body))); j=await r.json().catch(()=>({})); }
   catch(e){ throw new Error('Serveur sans péage injoignable, réessaie dans un instant'); }
@@ -497,10 +500,19 @@ async function valhalla(points){
     legs.push({distance:L.summary.length*1000,duration:L.summary.time,annotation:ad.length===sh.length-1?{distance:ad,duration:at}:null,steps});
     if(coords.length) coords.push(...sh.slice(1)); else coords.push(...sh);
   });
-  return {geometry:{type:'LineString',coordinates:coords},distance:j.trip.summary.length*1000,duration:j.trip.summary.time,legs};
+  return {geometry:{type:'LineString',coordinates:coords},distance:j.trip.summary.length*1000,duration:j.trip.summary.time,legs,src:'valhalla'};
 }
 // Km sur des tronçons à péage (classe "toll" fournie par OSRM à partir d'OpenStreetMap)
-function tollKm(route){ let km=0; route.legs.forEach(l=>(l.steps||[]).forEach(st=>{ const x=(st.intersections||[])[0]; if(x&&(x.classes||[]).includes('toll')) km+=st.distance/1000; })); return km; }
+function tollKm(route){
+  let km=0;
+  if(route.src==='osrm'){ // secours : OSRM ne signale pas les péages -> on compte les autoroutes « A » (approximatif)
+    route.legs.forEach(l=>(l.steps||[]).forEach(st=>{ const ref=String(st.ref||''), cl=((st.intersections||[])[0]||{}).classes||[];
+      if(cl.includes('toll')||/(^|;\s*)A\s?\d/.test(ref)) km+=st.distance/1000; }));
+    route.tollApprox=true; return km;
+  }
+  route.legs.forEach(l=>(l.steps||[]).forEach(st=>{ const x=(st.intersections||[])[0]; if(x&&(x.classes||[]).includes('toll')) km+=st.distance/1000; }));
+  return km;
+}
 function tollCost(km){ return km*(+$('#tollRate').value); }
 function euros(x){ return x.toFixed(x<10?2:0).replace('.',',')+' €'; }
 function flatAnn(route){ let d=[],t=[]; route.legs.forEach(l=>{ if(l.annotation&&l.annotation.distance){ d=d.concat(l.annotation.distance); t=t.concat(l.annotation.duration); } }); return {d,t}; }
@@ -1073,7 +1085,7 @@ function renderResults(){
   <div class="sum" style="grid-template-columns:1fr 1fr"><div><small>Départ</small><b>${clock(0)}</b></div><div><small><i class="ic ic-flag"></i> Arrivée prévue</small><b>${clock(total)}</b></div></div>
   <div class="sum"><div><small>Total</small><b>${fmtDur(total)}</b></div><div><small>Arrêts</small><b>${state.stops.length}</b></div><div><small>Arrivée</small><b class="pct ${pctClass(sim.arrive,s.resDest)}">${Math.round(sim.arrive)} %</b></div></div>`;
   const tk=tollKm(state.route);
-  h+=`<div class="sum" style="grid-template-columns:1fr"><div><small>Péage estimé</small><b>${tk>1?'≈ '+euros(tollCost(tk))+' <small style="display:inline">('+Math.round(tk)+' km payants)</small>':'Aucun péage'}</b></div></div>`;
+  h+=`<div class="sum" style="grid-template-columns:1fr"><div><small>Péage estimé${state.route.tollApprox?' (approximatif : autoroutes comptées payantes)':''}</small><b>${tk>1?'≈ '+euros(tollCost(tk))+' <small style="display:inline">('+Math.round(tk)+' km payants)</small>':'Aucun péage'}</b></div></div>`;
   if(state.alt){
     const dK=Math.round(state.alt.km-sim.km), dM=Math.round(state.alt.min-sim.driveMin), sg=x=>(x>0?'+':x<0?'−':'±')+Math.abs(x);
     h+=`<div class="alert info">${state.noToll?'<i class="ic ic-ban"></i> Trajet <b>sans péage</b>.':'<i class="ic ic-road"></i> Trajet <b>avec péages</b> autorisés.'}<br>Version ${state.alt.noToll?'sans péage':'avec péages'} : ${sg(dK)} km, ${sg(dM)} min de conduite${state.alt.noToll?(tk>1?', économie ≈ '+euros(tollCost(tk)):''):(state.alt.tollKm>1?', péage ≈ '+euros(tollCost(state.alt.tollKm)):'')}. <button class="btn2" style="margin-top:6px" onclick="switchToll()">Prendre la version ${state.alt.noToll?'sans péage':'avec péages'}</button></div>`;
