@@ -202,7 +202,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.28/09/2026 14:05</div>
+  <div class="ver">v.28/09/2026 14:18</div>
 </header>
 
 <div class="layout">
@@ -1099,13 +1099,14 @@ function updateNav(ll){
   const T=state.prof.T, now=Date.now(), at=m=>hhmm(new Date(now+m*60000));
   const chargeAhead=kmMax=>state.sim.steps.filter(s=>s.stop&&s.stop.km>km+0.3&&s.stop.km<kmMax).reduce((a,s)=>a+s.mins,0);
   const toDest=(T[T.length-1]-T[i])+chargeAhead(1e9);
-  let t=`<i class="ic ic-pin"></i> Km <b>${Math.round(km)}</b> / ${Math.round(tot)} · reste ${Math.round(tot-km)} km · <i class="ic ic-battery"></i> prévu ici ≈ <b class="pct ${pctClass(soc,settings().resCh)}">${Math.round(soc)} %</b><br><i class="ic ic-flag"></i> Arrivée ≈ <b>${at(toDest)}</b> (dans ${fmtDur(toDest)})`;
-  if(next){ const m=(T[next.idx]-T[i])+chargeAhead(next.km); t+=`<br><i class="ic ic-bolt"></i> Prochaine borne : <b>${esc(next.name)}</b> (${next.op==='tesla'?'Tesla':'Powerdot'}${next.known?' '+Math.round(next.kw)+' kW':''}) dans <b>${Math.round(next.km-km)} km</b> · ≈ ${at(m)} · ${needHtml(next,true)}`; }
-  else t+='<br><i class="ic ic-bolt"></i> Plus de borne rapide d\'ici l\'arrivée';
-  if(stop&&stop!==next){ const st=state.sim.steps.find(s=>s.stop===stop); t+=`<br><span class="dot" style="background:var(--stop)"></span> Arrêt prévu : ${esc(stop.name)} dans ${Math.round(stop.km-km)} km · ≈ ${at((T[stop.idx]-T[i])+chargeAhead(stop.km))}${st?' · recharge ≈ '+fmtDur(st.mins):''}`; }
+  let t=`<i class="ic ic-pin"></i> Km <b>${Math.round(km)}</b> / ${Math.round(tot)} · reste ${Math.round(tot-km)} km · <i class="ic ic-battery"></i> prévu ici ≈ <b class="pct ${pctClass(soc,settings().resCh)}">${Math.round(soc)} %</b><br><i class="ic ic-flag"></i> Arrivée ≈ <b>${at(toDest)}</b> (dans ${fmtDur(toDest)}) avec <b class="pct ${pctClass(state.sim.arrive,settings().resDest)}">${Math.round(state.sim.arrive)} %</b>`;
+  if(next&&next!==stop){ const m=(T[next.idx]-T[i])+chargeAhead(next.km); t+=`<br><i class="ic ic-bolt"></i> Prochaine borne : <b>${esc(next.name)}</b> (${next.op==='tesla'?'Tesla':'Powerdot'}${next.known?' '+Math.round(next.kw)+' kW':''}) dans <b>${Math.round(next.km-km)} km</b> · ≈ ${at(m)} · <i class="ic ic-battery"></i> ${Math.round(socAt(next))} % · ${needHtml(next,true)}`; }
+  else if(!next) t+='<br><i class="ic ic-bolt"></i> Plus de borne rapide d\'ici l\'arrivée';
+  if(stop){ const st=state.sim.steps.find(s=>s.stop===stop); t+=`<br><span class="dot" style="background:var(--stop)"></span> Arrêt prévu : ${esc(stop.name)} dans ${Math.round(stop.km-km)} km · ≈ ${at((T[stop.idx]-T[i])+chargeAhead(stop.km))} · arrivée avec <b class="pct ${pctClass(socAt(stop),settings().resCh)}">${Math.round(socAt(stop))} %</b>${st?' · recharge ≈ '+fmtDur(st.mins):''}`; }
   t+=`<br><span style="font-size:12px;color:var(--mut)"><i class="ic ic-compass"></i> ${curSpeed!=null?Math.round(curSpeed*3.6)+' km/h':'vitesse ?'} · cap ${Math.round(heading)}°${headingUp&&(curSpeed==null||curSpeed<2.5)?' · carte figée tant que tu ne roules pas':''}</span>`;
   t+=`<div style="margin-top:6px"><button class="btn2" data-act="recalc"><i class="ic ic-refresh"></i>Recalculer depuis ici</button></div>`;
-  const mini=`<i class="ic ic-flag"></i> <b>${at(toDest)}</b> · ${Math.round(tot-km)} km · <i class="ic ic-battery"></i> <b class="pct ${pctClass(soc,settings().resCh)}">${Math.round(soc)} %</b>${next?` · <i class="ic ic-bolt"></i> ${Math.round(next.km-km)} km`:''}`;
+  const nPct=stop?socAt(stop):state.sim.arrive, nRes=stop?settings().resCh:settings().resDest;
+  const mini=`<i class="ic ic-flag"></i> <b>${at(toDest)}</b> · ${Math.round(tot-km)} km · <i class="ic ic-battery"></i> ${Math.round(soc)} % → ${stop?'<span class="dot" style="background:var(--stop)"></span>':'<i class="ic ic-flag"></i>'} <b class="pct ${pctClass(nPct,nRes)}">${Math.round(nPct)} %</b>${next&&next!==stop?` · <i class="ic ic-bolt"></i> ${Math.round(next.km-km)} km`:''}`;
   setNav(t,mini);
 }
 
