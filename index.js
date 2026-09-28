@@ -118,8 +118,9 @@ const UA = { "User-Agent": "TrajetModel3/1.0 (maj hebdo bornes)" };
 
 // Un pays : on interroge tous les serveurs Overpass EN MÊME TEMPS, le premier qui répond gagne.
 async function paysOverpass(code, ms) {
-  const f = ["operator", "brand", "network", "name"].map((k) => `nwr["amenity"="charging_station"]["${k}"~"tesla|power ?dot",i](area.p);`).join("");
-  const q = `[out:json][timeout:${Math.floor(ms / 1000) - 10}];area["ISO3166-1"="${code}"][admin_level=2]->.p;(${f});out center tags;`;
+  // On lit UNE seule fois toutes les bornes du pays, puis on filtre (beaucoup plus rapide, surtout pour l'Italie)
+  const f = ["operator", "brand", "network", "name"].map((k) => `nwr.b["${k}"~"tesla|power ?dot",i];`).join("");
+  const q = `[out:json][timeout:${Math.floor(ms / 1000) - 10}][maxsize:268435456];area["ISO3166-1"="${code}"][admin_level=2]->.p;nwr["amenity"="charging_station"](area.p)->.b;(${f});out center tags;`;
   const stop = new AbortController();
   let gagne = false;
   const timer = setTimeout(() => stop.abort(), ms);
@@ -185,9 +186,16 @@ exports.majBornesHebdo = onSchedule(
       if (out.length < 20) throw new Error(`liste trop courte (${out.length}), pays reçus : ${ok.join(", ") || "aucun"}`);
       const cur = (await ref.get()).data() || {};
       const nFr = cur.data ? JSON.parse(cur.data).length : 0;
+      // Pays en échec cette fois-ci : on garde ses bornes de la semaine précédente (Espagne = ouest, Italie = est)
+      const garde = [];
+      let ancien = []; try { ancien = JSON.parse(cur.dataEU || "[]"); } catch (e) { /* rien */ }
+      if (!ok.includes("ES")) garde.push(...ancien.filter((b) => b[1] < 5));
+      if (!ok.includes("IT")) garde.push(...ancien.filter((b) => b[1] >= 5));
+      if (garde.length) logger.info(`Anciennes bornes conservées pour le pays en échec : ${garde.length}`);
+      out.push(...garde);
       const dataEU = JSON.stringify(out);
       if ((cur.data || "").length + dataEU.length > 950000) throw new Error("liste trop volumineuse pour un document Firestore");
-      await ref.set({ tEU: Date.now(), dataEU, nEu: out.length, nFr, n: nFr + out.length, pays: ["FR", ...ok] }, { merge: true });
+      await ref.set({ tEU: Date.now(), dataEU, nEu: out.length, nFr, n: nFr + out.length, pays: ["FR", ...new Set([...ok, ...(cur.pays || []).filter((c) => c !== "FR")])] }, { merge: true });
       euOk = true;
       logger.info(`Espagne/Italie : ${out.length} stations enregistrées (${ok.join(" + ")})`);
     } catch (e) {
