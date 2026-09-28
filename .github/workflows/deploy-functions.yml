@@ -1,5 +1,6 @@
 # Déploie la Cloud Function (index.js) et les règles Firestore
 # automatiquement dès que l'un de ces fichiers change sur GitHub.
+# En cas de problème, la cause s'affiche en français dans "Annotations".
 name: Deploy Cloud Function + règles Firestore
 on:
   push:
@@ -8,22 +9,48 @@ on:
       - "index.js"
       - "package.json"
       - "firestore.rules"
+      - "firebase.json"
   workflow_dispatch: # bouton "Run workflow" dans l'onglet Actions
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
+      - name: Vérifications
+        shell: bash
+        env:
+          SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_TRAJET_MODEL3 }}
+        run: |
+          manque=""
+          for f in index.js package.json firebase.json firestore.rules; do [ -f "$f" ] || manque="$manque $f"; done
+          if [ -n "$manque" ]; then echo "::error::Fichiers manquants à la racine du dépôt :$manque (dépose-les depuis le zip)"; exit 1; fi
+          if [ -z "$SA" ]; then echo "::error::Clé secrète absente : ajoute FIREBASE_SERVICE_ACCOUNT_TRAJET_MODEL3 dans Settings > Secrets and variables > Actions"; exit 1; fi
+          printf '%s' "$SA" > "$RUNNER_TEMP/sa.json"
+          email=$(node -e 'try{const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(!d.client_email||!d.private_key)throw 0;console.log(d.client_email)}catch(e){process.exit(1)}' "$RUNNER_TEMP/sa.json") \
+            || { echo "::error::La clé secrète n'est pas un fichier JSON complet : recolle TOUT le contenu du fichier .json (de { à })"; exit 1; }
+          echo "::notice::Clé OK pour le compte $email"
       - name: Installer les dépendances
         run: npm install --no-audit --no-fund
-      - name: Clé du compte de service
-        run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_TRAJET_MODEL3 }}' > "$RUNNER_TEMP/sa.json"
       - name: Déployer
+        shell: bash
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
           FUNCTIONS_DISCOVERY_TIMEOUT: "60"
-        run: npx --yes firebase-tools@latest deploy --only "functions,firestore:rules" --project trajet-model3 --non-interactive --force
-
+        run: |
+          set +e
+          npx --yes firebase-tools@latest deploy --only "functions,firestore:rules" --project trajet-model3 --non-interactive --force 2>&1 | tee deploy.log
+          st=${PIPESTATUS[0]}
+          if [ "$st" -ne 0 ]; then
+            if grep -qiE "permission|denied|403|does not have|not authorized" deploy.log; then
+              echo "::error::Droits insuffisants pour github-deploy : vérifie les 6 rôles dans IAM (Cloud Functions Admin, Cloud Run Admin, Service Account User, Cloud Scheduler Admin, Firebase Rules Admin, Artifact Registry Administrator)"
+            fi
+            if grep -qiE "has not been used|is disabled|enable it" deploy.log; then
+              echo "::error::Une API Google n'est pas activée : le lien d'activation est dans les lignes ci-dessous"
+            fi
+            grep -iE "error|denied|required|enable" deploy.log | grep -v "^\s*$" | tail -6 | while IFS= read -r l; do echo "::error::${l:0:300}"; done
+            exit "$st"
+          fi
+          echo "::notice::Cloud Function et règles Firestore déployées ✅"
