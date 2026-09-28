@@ -189,6 +189,11 @@ body.navmode{overflow:hidden}
 .seg button.on{background:var(--acc);color:#fff}
 #navbar{position:absolute;z-index:600;left:62px;right:62px;top:12px;max-width:720px;margin:0 auto;background:var(--glass);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--line2);border-radius:16px;padding:11px 14px;font-size:14.5px;line-height:1.55;box-shadow:var(--shadow)}
 #navbar b{font-size:1.08em}
+.navtog{float:right;margin:-3px -5px 4px 10px;width:34px;height:34px;border-radius:10px;border:1px solid var(--line2);background:var(--card2);color:var(--txt);font-size:15px;font-weight:700;cursor:pointer;touch-action:manipulation}
+#navbar.mini{left:50%;right:auto;transform:translateX(-50%);width:max-content;max-width:calc(100% - 124px);padding:6px 8px 6px 14px;border-radius:999px}
+#navbar.mini .navrow{display:flex;align-items:center;gap:10px;cursor:pointer}
+#navbar.mini .navtxt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+#navbar.mini .navtog{float:none;margin:0;width:30px;height:30px;flex:none}
 .me{width:38px;height:38px;display:flex;align-items:center;justify-content:center}
 .mearrow{width:0;height:0;border-left:11px solid transparent;border-right:11px solid transparent;border-bottom:28px solid var(--acc2);filter:drop-shadow(0 0 2px #fff) drop-shadow(0 2px 4px rgba(0,0,0,.6))}
 @media (max-width:600px){#navbar{left:56px;right:10px;font-size:13.5px}.card{padding:14px}}
@@ -197,7 +202,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.28/09/2026 11:40</div>
+  <div class="ver">v.28/09/2026 14:05</div>
 </header>
 
 <div class="layout">
@@ -1067,12 +1072,26 @@ function onPos(p){
   }
   updateNav(ll);
 }
+/* bandeau GPS repliable : touche ▴ pour le réduire à une ligne, touche la ligne pour le rouvrir (mémorisé) */
+let navCollapsed=false; try{ navCollapsed=localStorage.getItem('navMini')==='1'; }catch(e){}
+function setNav(full,mini){
+  const nb=$('#navbar'); nb.classList.toggle('mini',navCollapsed);
+  nb.innerHTML=navCollapsed
+    ?`<div class="navrow"><span class="navtxt">${mini||full}</span><button class="navtog" aria-label="Déplier le bandeau">▾</button></div>`
+    :`<button class="navtog" aria-label="Replier le bandeau">▴</button>${full}`;
+}
+// le bandeau est redessiné à chaque position GPS : on capte l'appui dès le contact (pointerdown) sur le conteneur, qui, lui, ne change jamais
+$('#navbar').addEventListener('pointerdown',e=>{
+  if(e.target.closest('.navtog,.navrow')){ e.preventDefault(); toggleNav(); return; }
+  if(e.target.closest('[data-act="recalc"]')){ e.preventDefault(); recalcHere(); }
+});
+function toggleNav(){ navCollapsed=!navCollapsed; try{ localStorage.setItem('navMini',navCollapsed?'1':'0'); }catch(e){} if(lastPos) updateNav(lastPos); else $('#navbar').classList.toggle('mini',navCollapsed); }
+window.toggleNav=toggleNav;
 function updateNav(ll){
-  const nb=$('#navbar');
-  if(!state.prof||!state.sim){ nb.innerHTML='<i class="ic ic-pin"></i> Position suivie — calcule un trajet pour voir les bornes à venir.'; return; }
+  if(!state.prof||!state.sim){ setNav('<i class="ic ic-pin"></i> Position suivie — calcule un trajet pour voir les bornes à venir.','<i class="ic ic-pin"></i> Position suivie'); return; }
   const {i,off}=nearestIdx(state.prof,ll[0],ll[1]), D=state.prof.D;
   const km=D[i]/1000, tot=D[D.length-1]/1000;
-  if(off>1.5){ nb.innerHTML=`<i class="ic ic-pin"></i> Hors du trajet prévu (à ${off.toFixed(1)} km). Recalcule depuis ta position si besoin.`; return; }
+  if(off>1.5){ setNav(`<i class="ic ic-pin"></i> Hors du trajet prévu (à ${off.toFixed(1)} km). Recalcule depuis ta position si besoin.<div style="margin-top:6px"><button class="btn2" data-act="recalc"><i class="ic ic-refresh"></i>Recalculer depuis ici</button></div>`,`<i class="ic ic-pin"></i> Hors du trajet (${off.toFixed(1)} km)`); return; }
   const soc=socAt({km,idx:i});
   const next=state.chargers.filter(c=>!c.slow&&c.km>km+0.3)[0];
   const stop=state.stops.filter(c=>c.km>km+0.3)[0];
@@ -1085,8 +1104,9 @@ function updateNav(ll){
   else t+='<br><i class="ic ic-bolt"></i> Plus de borne rapide d\'ici l\'arrivée';
   if(stop&&stop!==next){ const st=state.sim.steps.find(s=>s.stop===stop); t+=`<br><span class="dot" style="background:var(--stop)"></span> Arrêt prévu : ${esc(stop.name)} dans ${Math.round(stop.km-km)} km · ≈ ${at((T[stop.idx]-T[i])+chargeAhead(stop.km))}${st?' · recharge ≈ '+fmtDur(st.mins):''}`; }
   t+=`<br><span style="font-size:12px;color:var(--mut)"><i class="ic ic-compass"></i> ${curSpeed!=null?Math.round(curSpeed*3.6)+' km/h':'vitesse ?'} · cap ${Math.round(heading)}°${headingUp&&(curSpeed==null||curSpeed<2.5)?' · carte figée tant que tu ne roules pas':''}</span>`;
-  t+=`<div style="margin-top:6px"><button class="btn2" onclick="recalcHere()"><i class="ic ic-refresh"></i>Recalculer depuis ici</button></div>`;
-  nb.innerHTML=t;
+  t+=`<div style="margin-top:6px"><button class="btn2" data-act="recalc"><i class="ic ic-refresh"></i>Recalculer depuis ici</button></div>`;
+  const mini=`<i class="ic ic-flag"></i> <b>${at(toDest)}</b> · ${Math.round(tot-km)} km · <i class="ic ic-battery"></i> <b class="pct ${pctClass(soc,settings().resCh)}">${Math.round(soc)} %</b>${next?` · <i class="ic ic-bolt"></i> ${Math.round(next.km-km)} km`:''}`;
+  setNav(t,mini);
 }
 
 
