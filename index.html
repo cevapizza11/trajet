@@ -202,7 +202,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.28/09/2026 14:40</div>
+  <div class="ver">v.28/09/2026 21:52</div>
 </header>
 
 <div class="layout">
@@ -285,8 +285,8 @@ body.navmode{overflow:hidden}
             <input type="range" id="resCh" min="5" max="30" step="1" value="10">
           </div>
           <div class="slider">
-            <div class="top"><span>Arrivée mini à destination</span><b id="resDest-v"></b></div>
-            <input type="range" id="resDest" min="5" max="50" step="1" value="15">
+            <div class="top"><span>Batterie voulue à l'arrivée (destination)</span><b id="resDest-v"></b></div>
+            <input type="range" id="resDest" min="5" max="100" step="5" value="15">
           </div>
           <div class="slider">
             <div class="top"><span>Recharger au maximum jusqu'à</span><b id="maxT-v"></b></div>
@@ -314,6 +314,15 @@ body.navmode{overflow:hidden}
                 <option value="1.1">Pluie / vent</option>
                 <option value="1.2">Froid (&lt; 5 °C)</option>
                 <option value="1.3">Grand froid (&lt; 0 °C)</option>
+              </select>
+            </div>
+            <div>
+              <label for="hwSpeed">Ta vitesse sur autoroute</label>
+              <select id="hwSpeed">
+                <option value="0">Comme le GPS</option>
+                <option value="110">110 km/h</option>
+                <option value="120">120 km/h</option>
+                <option value="130" selected>130 km/h</option>
               </select>
             </div>
             <div>
@@ -378,6 +387,8 @@ const CAR = { name: 'Model 3 Propulsion 2022', usable: 57.5 }; // kWh utiles (LF
 // Courbe de charge approximative (kW max acceptés selon le % batterie)
 function carCurve(p){ return p<30?165 : p<50?120 : p<70?80 : p<80?55 : p<90?35 : 20; }
 // Consommation (Wh/km) selon la vitesse moyenne du tronçon
+// Vitesse réellement roulée : sur autoroute (tronçon calculé ≥ 105 km/h) on prend TA vitesse, sur voie rapide (95-105) au max 110
+function realV(v){ const h=+(document.getElementById('hwSpeed')||{}).value||0; if(!h) return v; return v>=105?h : v>=95?Math.min(h,110) : v; }
 function whPerKm(v){ v=Math.max(15,Math.min(v,150)); return 72 + 0.00625*v*v + 800/Math.max(v,20); }
 
 const OVERPASS = ['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
@@ -400,7 +411,7 @@ function settings(){ return { soc:+$('#soc').value, resCh:+$('#resCh').value, re
 function pctClass(p,min){ return p<0?'bad' : p<min?'warn' : 'ok'; }
 
 /* ================== RÉGLAGES MÉMORISÉS ================== */
-const SAVE_IDS=['soc','resCh','resDest','maxT','adj','cond','radius','auto','opTesla','opPd','noToll','tollRate','maxMin','maxDrive','strategy','prefOp','priceTesla','pricePd'];
+const SAVE_IDS=['soc','resCh','resDest','maxT','adj','cond','radius','auto','opTesla','opPd','noToll','tollRate','maxMin','maxDrive','strategy','prefOp','priceTesla','pricePd','hwSpeed'];
 function saveSettings(){ try{ const o={}; SAVE_IDS.forEach(id=>{const el=$('#'+id); o[id]=el.type==='checkbox'?el.checked:el.value;}); localStorage.setItem('trajetM3',JSON.stringify(o)); }catch(e){} }
 function loadSettings(){ try{ const o=JSON.parse(localStorage.getItem('trajetM3')||'{}'); SAVE_IDS.forEach(id=>{ if(o[id]===undefined) return; const el=$('#'+id); if(el.type==='checkbox') el.checked=o[id]; else el.value=o[id]; }); }catch(e){} }
 function fillRanges(){ document.querySelectorAll('input[type=range]').forEach(r=>{ const p=(r.value-r.min)/(r.max-r.min)*100; r.style.setProperty('--p',p+'%'); }); }
@@ -416,12 +427,13 @@ function refreshLabels(){
   const few=$('#strategy').value==='few';
   $('#rulesTxt').innerHTML='<b>Règles actives pour les arrêts automatiques :</b><br>'+
     '• arriver à une borne avec au moins '+$('#resCh').value+' %<br>'+
-    '• arriver à destination avec au moins '+$('#resDest').value+' %<br>'+
+    '• arriver à destination avec au moins '+$('#resDest').value+' %'+(+$('#resDest').value>=+$('#maxT').value-20?' (objectif élevé : le dernier arrêt peut recharger au-delà de '+$('#maxT').value+' % et de la durée max., jusqu\'à 100 %)':'')+'<br>'+
     '• recharger au maximum jusqu\'à '+$('#maxT').value+' %<br>'+
     (few?'• stratégie « le moins d\'arrêts » : recharges aussi longues que nécessaire, sans limite de durée<br>'
         :'• stratégie « arrêts courts » : recharge limitée à '+$('#maxMin').value+' min par arrêt (quitte à s\'arrêter plus souvent)<br>')+
     '• bornes préférées : '+({none:'indifférent',powerdot:'Powerdot d\'abord (Tesla seulement si aucune Powerdot atteignable)',tesla:'Tesla d\'abord (Powerdot seulement si aucune Tesla atteignable)'}[$('#prefOp').value])+'<br>'+
     '• puissance réelle : les bornes de 100 kW et plus sont privilégiées, quitte à s\'arrêter un peu plus tôt<br>'+
+    '• vitesse sur autoroute pour la consommation : '+(+$('#hwSpeed').value?$('#hwSpeed').value+' km/h (voies rapides : 110 km/h max.)':'celle prévue par le GPS')+'<br>'+
     '• bornes lentes (< 40 kW) affichées sur la carte mais jamais choisies automatiquement<br>'+
     '• '+(few?'pas de pause imposée (mode « le moins d\'arrêts »)':md?'une pause au moins toutes les '+fmtDur(md)+' de conduite':'pas de pause imposée (arrêts seulement selon la batterie)');
   $('#tollRate-v').textContent=(+$('#tollRate').value).toFixed(3).replace('.',',')+' €/km';
@@ -575,15 +587,15 @@ function buildProfile(route){
   for(let i=1;i<n;i++){
     const d=useAnn?ad[i-1]:hav(coords[i-1],coords[i]);
     const v=(useAnn&&at[i-1]>0)?d/at[i-1]*3.6:avgV;
-    D[i]=D[i-1]+d; E[i]=E[i-1]+d/1000*whPerKm(v)*f/1000; T[i]=T[i-1]+d/Math.max(v,5)*3.6/60; // T en minutes
+    D[i]=D[i-1]+d; E[i]=E[i-1]+d/1000*whPerKm(realV(v))*f/1000; T[i]=T[i-1]+d/Math.max(v,5)*3.6/60; // T en minutes
   }
   if(route.elev) for(let i=1;i<n;i++) E[i]+=elevAt(route,D[i]); // montées / descentes
   return {coords,D,E,T};
 }
 function legEnergy(leg){
   const f=factor(), a=leg.annotation;
-  if(a&&a.distance&&a.distance.length){ let e=0; for(let i=0;i<a.distance.length;i++){ const d=a.distance[i], t=a.duration[i]; const v=t>0?d/t*3.6:60; e+=d/1000*whPerKm(v)*f/1000; } return e; }
-  const v=leg.distance/Math.max(leg.duration,1)*3.6; return leg.distance/1000*whPerKm(v)*f/1000;
+  if(a&&a.distance&&a.distance.length){ let e=0; for(let i=0;i<a.distance.length;i++){ const d=a.distance[i], t=a.duration[i]; const v=t>0?d/t*3.6:60; e+=d/1000*whPerKm(realV(v))*f/1000; } return e; }
+  const v=leg.distance/Math.max(leg.duration,1)*3.6; return leg.distance/1000*whPerKm(realV(v))*f/1000;
 }
 
 /* ================== BORNES (OpenStreetMap / Overpass) ================== */
@@ -796,9 +808,21 @@ function autoPlan(prof,chargers,s){
     }
     const bucket=c=>effKw(c)>=100?2:effKw(c)>=50?1:0;
     pool.sort((a,b)=>(bucket(b.c)-bucket(a.c))||(short?(effKw(b.c)-effKw(a.c)):(b.c.km-a.c.km))||(a.c.detour-b.c.detour)||(b.c.km-a.c.km));
-    const pick=pool[0].c, arr=pool[0].arr;
+    let pick=pool[0].c, arr=pool[0].arr, finalStop=false;
+    // Objectif d'arrivée élevé (ex. 80 %) : si même à "recharger max" on n'y arrive pas depuis la borne choisie,
+    // on cherche un DERNIER arrêt (au plus près de la destination) où l'on recharge juste ce qu'il faut, jusqu'à 100 %.
+    const needFin=x=>E[last]-E[x.c.idx]+x.c.detour*cons+resDest;
+    const high=s.resDest>=s.maxT-20; // objectif d'arrivée élevé
+    if(high&&needFin(pool[0])>maxT){
+      const fin=pool0.filter(x=>needFin(x)<=cap*0.99&&needFin(x)-resDest+resCh<=maxT&&(!maxDrive||(T[last]-T[x.c.idx])<=maxDrive*1.15));
+      if(fin.length){
+        fin.sort((a,b)=>(bucket(b.c)-bucket(a.c))||(b.c.km-a.c.km)||(a.c.detour-b.c.detour));
+        pick=fin[0].c; arr=fin[0].arr; finalStop=true;
+      }
+    }
     plan.push(pick);
     const rem=E[last]-E[pick.idx]+pick.detour*cons;
+    if(finalStop){ soc=Math.max(arr,Math.min(cap,rem+resDest+0.6)); posIdx=pick.idx; back=pick.detour*cons; continue; }
     const byTime=short?pctAfter(arr/cap*100,s.maxMin,pick.kw)/100*cap:Infinity; // ce qu'on récupère en "maxMin" minutes
     soc=Math.max(arr,Math.min(maxT,rem+resDest+1,byTime)); posIdx=pick.idx; back=pick.detour*cons;
   }
@@ -833,14 +857,16 @@ function simulate(route,pts,s){
       let j=i+1, e=legE[j]; while(pts[j]&&pts[j].type==='via'){ j++; e+=legE[j]; }
       const nextReserve=pts[j]?s.resCh:s.resDest;
       const need=e/cap*100+nextReserve;
-      let target=Math.min(s.maxT,Math.ceil((need+1)/5)*5);
+      const lastStop=!pts[j], finalBoost=lastStop&&s.resDest>=s.maxT-20&&need>s.maxT&&need<=100; // objectif d'arrivée élevé
+      let target=finalBoost?Math.min(100,Math.ceil(need+1)):Math.min(s.maxT,Math.ceil((need+1)/5)*5);
       const byTime=Math.floor(pctAfter(Math.max(arrive,0),s.maxMin,st.kw));
       if(st.userTarget!=null){ // % de départ choisi à la main pour cet arrêt
         target=Math.max(arrive,Math.min(100,st.userTarget)); step.manual=true;
         if(need>target) warns.push({lvl:'warn',t:`Arrêt ${no} (${st.name}) : en repartant à ${Math.round(target)} %, tu n'atteins pas la suite avec ta réserve (il faudrait ≈ ${Math.ceil(need)} %).`});
       }
+      else if(finalBoost){ step.finalBoost=true; }
       else if(s.strategy!=='few'&&target>byTime){ target=Math.max(byTime,arrive); if(need>target&&need<=s.maxT) warns.push({lvl:'warn',t:`Arrêt ${no} (${st.name}) : en ${s.maxMin} min tu ne montes qu'à ${Math.round(target)} %, pas assez pour la suite. Relance « Arrêts automatiques » ou ajoute une borne.`}); }
-      if(!step.manual&&need>s.maxT) warns.push({lvl:'warn',t:`Arrêt ${no} (${st.name}) : même chargée à ${s.maxT} %, tu n'arrives pas à la recharge suivante avec ta réserve. Augmente « Recharger au maximum » ou ajoute un arrêt.`});
+      if(!step.manual&&!step.finalBoost&&need>s.maxT) warns.push({lvl:'warn',t:`Arrêt ${no} (${st.name}) : même chargée à ${s.maxT} %, tu n'arrives pas à la recharge suivante avec ta réserve. Augmente « Recharger au maximum » ou ajoute un arrêt.`});
       if(target<=arrive) target=arrive;
       const mins=chargeMinutes(Math.max(arrive,0),target,st.kw);
       chargeMin+=mins; Object.assign(step,{stop:st,no,target,mins});
