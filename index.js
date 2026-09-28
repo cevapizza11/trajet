@@ -4,7 +4,8 @@
    1. télécharge la base nationale officielle IRVE (Tesla + Powerdot) pour la France
       + les Superchargers Tesla et bornes Powerdot d'Espagne et d'Italie (OpenStreetMap)
    2. la regroupe par station (format compact identique à l'app)
-   3. l'enregistre dans Firestore : bornes/france  { t, n, data }
+   3. l'enregistre dans Firestore : bornes/france  { t, n, nFr, nEu, data, dataEU }
+      (la France est enregistrée tout de suite, l'Europe ensuite, avec un temps limité)
    L'app lit ce document : tous tes appareils ont la même liste à jour.
    ===================================================================== */
 const { onSchedule } = require("firebase-functions/v2/scheduler");
@@ -113,49 +114,88 @@ function parseOsm(el) {
     parseInt(t.capacity, 10) || 1, String(t["addr:city"] || "").slice(0, 40), addr.slice(0, 90)];
 }
 
-async function downloadEU() {
-  const area = PAYS_EU.map((c) => `area["ISO3166-1"="${c}"][admin_level=2];`).join("");
-  const f = ["operator", "brand", "network", "name"].map((k) => `nwr["amenity"="charging_station"]["${k}"~"tesla|power ?dot",i](area.pays);`).join("");
-  const q = `[out:json][timeout:240];(${area})->.pays;(${f});out center tags;`;
-  let lastErr;
-  for (const ep of OVERPASS) {
-    try {
-      const r = await fetch(ep, { method: "POST", body: new URLSearchParams({ data: q }), signal: AbortSignal.timeout(250000) });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = await r.json();
-      if (j.remark && !(j.elements || []).length) throw new Error(j.remark);
-      const out = [];
-      for (const el of j.elements || []) {
-        const c = parseOsm(el); if (!c) continue;
-        // doublons (même opérateur à moins de ~120 m) : on garde la plus puissante
-        const dup = out.find((o) => o[2] === c[2] && Math.abs(o[0] - c[0]) < 0.0011 && Math.abs(o[1] - c[1]) < 0.0015);
-        if (dup) { if (c[3] > dup[3]) dup[3] = c[3]; if (!dup[7] && c[7]) dup[7] = c[7]; } else out.push(c);
+const UA = { "User-Agent": "TrajetModel3/1.0 (maj hebdo bornes)" };
+
+// Un pays : on interroge tous les serveurs Overpass EN MÊME TEMPS, le premier qui répond gagne.
+async function paysOverpass(code, ms) {
+  const f = ["operator", "brand", "network", "name"].map((k) => `nwr["amenity"="charging_station"]["${k}"~"tesla|power ?dot",i](area.p);`).join("");
+  const q = `[out:json][timeout:${Math.floor(ms / 1000) - 10}];area["ISO3166-1"="${code}"][admin_level=2]->.p;(${f});out center tags;`;
+  const stop = new AbortController();
+  let gagne = false;
+  const timer = setTimeout(() => stop.abort(), ms);
+  try {
+    return await Promise.any(OVERPASS.map(async (ep) => {
+      const t0 = Date.now();
+      try {
+        const r = await fetch(ep, { method: "POST", headers: UA, body: new URLSearchParams({ data: q }), signal: stop.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        const els = j.elements || [];
+        if (j.remark && !els.length) throw new Error(j.remark.slice(0, 120));
+        if (els.length < 5) throw new Error(`réponse trop courte (${els.length})`);
+        gagne = true;
+        logger.info(`Overpass ${code} : ${ep} a répondu ${els.length} éléments en ${Math.round((Date.now() - t0) / 1000)} s`);
+        return els;
+      } catch (e) {
+        if (!gagne) logger.warn(`Overpass ${code} : ${ep} en échec (${stop.signal.aborted ? "délai dépassé" : e.message})`);
+        throw e;
       }
-      if (out.length < 20) throw new Error(`liste trop courte (${out.length})`);
-      logger.info(`Overpass ${ep} : ${out.length} stations en ${PAYS_EU.join(" + ")}`);
-      return out;
-    } catch (e) {
-      logger.warn(`Overpass ${ep} en échec : ${e.message}`);
-      lastErr = e;
+    }));
+  } finally { clearTimeout(timer); stop.abort(); }
+}
+
+async function downloadEU(ms) {
+  const res = await Promise.allSettled(PAYS_EU.map((c) => paysOverpass(c, ms)));
+  const out = [], ok = [];
+  res.forEach((r, i) => {
+    if (r.status !== "fulfilled") return;
+    ok.push(PAYS_EU[i]);
+    for (const el of r.value) {
+      const c = parseOsm(el); if (!c) continue;
+      // doublons (même opérateur à moins de ~120 m) : on garde la plus puissante
+      const dup = out.find((o) => o[2] === c[2] && Math.abs(o[0] - c[0]) < 0.0011 && Math.abs(o[1] - c[1]) < 0.0015);
+      if (dup) { if (c[3] > dup[3]) dup[3] = c[3]; if (!dup[7] && c[7]) dup[7] = c[7]; } else out.push(c);
     }
-  }
-  throw lastErr || new Error("Overpass indisponible");
+  });
+  return { out, ok };
 }
 
 exports.majBornesHebdo = onSchedule(
   { schedule: "every monday 04:00", timeZone: "Europe/Paris", region: "europe-west1", timeoutSeconds: 540, memory: "512MiB", retryCount: 2 },
   async () => {
+    const debut = Date.now();
     const ref = admin.firestore().collection("bornes").doc("france");
     const prev = (await ref.get()).data() || {};
-    let fr = null, eu = null;
-    try { fr = await downloadBase(); } catch (e) { logger.error(`France : ${e.message} (ancienne liste conservée)`); }
-    try { eu = await downloadEU(); } catch (e) { logger.error(`Espagne/Italie : ${e.message} (ancienne liste conservée)`); }
-    if (!fr && !eu) throw new Error("aucune source disponible : nouvel essai automatique");
-    const data = fr ? JSON.stringify(fr) : prev.data, dataEU = eu ? JSON.stringify(eu) : (prev.dataEU || "[]");
-    if (!data) throw new Error("pas de liste France disponible");
-    if (data.length + dataEU.length > 950000) throw new Error("liste trop volumineuse pour un document Firestore");
-    const nFr = JSON.parse(data).length, nEu = JSON.parse(dataEU).length;
-    await ref.set({ t: fr ? Date.now() : (prev.t || Date.now()), tEU: eu ? Date.now() : (prev.tEU || 0), n: nFr + nEu, nFr, nEu, pays: ["FR", ...PAYS_EU], data, dataEU });
-    logger.info(`bornes/france mis à jour : ${nFr} stations France + ${nEu} Espagne/Italie`);
+
+    // 1) FRANCE d'abord, enregistrée tout de suite (même si l'Europe échoue ensuite)
+    let frOk = false;
+    try {
+      const fr = await downloadBase();
+      await ref.set({ t: Date.now(), data: JSON.stringify(fr), nFr: fr.length, n: fr.length + (prev.nEu || 0) }, { merge: true });
+      frOk = true;
+      logger.info(`France : ${fr.length} stations enregistrées`);
+    } catch (e) { logger.error(`France : ${e.message} (ancienne liste conservée)`); }
+
+    // 2) ESPAGNE + ITALIE, avec un temps limité pour ne jamais dépasser les 9 min
+    const reste = 540000 - (Date.now() - debut) - 40000;
+    const budget = Math.max(60000, Math.min(240000, reste));
+    let euOk = false;
+    try {
+      const { out, ok } = await downloadEU(budget);
+      if (out.length < 20) throw new Error(`liste trop courte (${out.length}), pays reçus : ${ok.join(", ") || "aucun"}`);
+      const cur = (await ref.get()).data() || {};
+      const nFr = cur.data ? JSON.parse(cur.data).length : 0;
+      const dataEU = JSON.stringify(out);
+      if ((cur.data || "").length + dataEU.length > 950000) throw new Error("liste trop volumineuse pour un document Firestore");
+      await ref.set({ tEU: Date.now(), dataEU, nEu: out.length, nFr, n: nFr + out.length, pays: ["FR", ...ok] }, { merge: true });
+      euOk = true;
+      logger.info(`Espagne/Italie : ${out.length} stations enregistrées (${ok.join(" + ")})`);
+    } catch (e) {
+      const msg = e && e.errors ? e.errors.map((x) => x.message).join(" | ") : e.message;
+      logger.error(`Espagne/Italie : ${msg} (ancienne liste conservée)`);
+    }
+
+    logger.info(`Terminé en ${Math.round((Date.now() - debut) / 1000)} s — France ${frOk ? "OK" : "échec"}, Espagne/Italie ${euOk ? "OK" : "échec"}`);
+    if (!frOk && !euOk) throw new Error("aucune source disponible : nouvel essai automatique");
   }
 );
