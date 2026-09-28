@@ -1,1 +1,29 @@
+# Déploie la Cloud Function (index.js) et les règles Firestore
+# automatiquement dès que l'un de ces fichiers change sur GitHub.
+name: Deploy Cloud Function + règles Firestore
+on:
+  push:
+    branches: [main]
+    paths:
+      - "index.js"
+      - "package.json"
+      - "firestore.rules"
+  workflow_dispatch: # bouton "Run workflow" dans l'onglet Actions
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Installer les dépendances
+        run: npm install --no-audit --no-fund
+      - name: Clé du compte de service
+        run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT_TRAJET_MODEL3 }}' > "$RUNNER_TEMP/sa.json"
+      - name: Déployer
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/sa.json
+          FUNCTIONS_DISCOVERY_TIMEOUT: "60"
+        run: npx --yes firebase-tools@latest deploy --only "functions,firestore:rules" --project trajet-model3 --non-interactive --force
 
