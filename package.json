@@ -1,0 +1,11 @@
+{
+  "name": "functions-bornes",
+  "description": "Mise à jour hebdomadaire de la liste des bornes Tesla / Powerdot pour Trajet Model 3",
+  "main": "index.js",
+  "engines": { "node": "22" },
+  "dependencies": {
+    "firebase-admin": "^12.7.0",
+    "firebase-functions": "^6.1.0"
+  },
+  "private": true
+}

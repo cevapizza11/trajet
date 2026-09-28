@@ -1,0 +1,10 @@
+{
+  "functions": [
+    {
+      "source": ".",
+      "codebase": "default",
+      "ignore": ["node_modules", ".git", ".github", "firebase-debug.log", "*.html", "*.png", "*.webmanifest", "sw.js", "README.md"]
+    }
+  ],
+  "firestore": { "rules": "firestore.rules" }
+}

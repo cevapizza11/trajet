@@ -1,0 +1,15 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Liste des bornes : lecture pour l'app, écriture réservée à la Cloud Function
+    match /bornes/{doc} {
+      allow read: if true;
+      allow write: if false;
+    }
+    // Favoris + apprentissage conso : accessibles seulement avec le code de synchro (16 caractères min.)
+    match /perso/{code} {
+      allow read, write: if code.size() >= 16
+        && (request.resource == null || request.resource.data.keys().hasOnly(['favs','trips','t']));
+    }
+  }
+}

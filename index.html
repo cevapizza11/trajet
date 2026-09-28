@@ -202,7 +202,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.28/09/2026 14:18</div>
+  <div class="ver">v.28/09/2026 14:40</div>
 </header>
 
 <div class="layout">
@@ -449,14 +449,16 @@ const layers = { route:L.layerGroup().addTo(map), chargers:L.layerGroup().addTo(
 /* ================== GÉOCODAGE ================== */
 async function geocode(q){
   const enc=encodeURIComponent(q);
-  const feat = j => (j.features||[]).map(f=>({label:f.properties.label,lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0]}));
-  const tries=[
-    ()=>fetch(`https://data.geopf.fr/geocodage/search?q=${enc}&limit=5&autocomplete=1`).then(r=>r.json()).then(feat),
-    ()=>fetch(`https://api-adresse.data.gouv.fr/search/?q=${enc}&limit=5&autocomplete=1`).then(r=>r.json()).then(feat),
-    ()=>fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&accept-language=fr&q=${enc}`).then(r=>r.json()).then(a=>a.map(x=>({label:x.display_name,lat:+x.lat,lon:+x.lon})))
-  ];
-  for(const t of tries){ try{ const r=await t(); if(r&&r.length) return r; }catch(e){} }
-  return [];
+  // France : base adresse nationale (très précise) — Europe : Photon (OpenStreetMap), fait pour l'autocomplétion
+  const feat=j=>(j.features||[]).map(f=>({label:f.properties.label,lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0],score:f.properties.score||0}));
+  const fr=async()=>{ for(const u of [`https://data.geopf.fr/geocodage/search?q=${enc}&limit=5&autocomplete=1`,`https://api-adresse.data.gouv.fr/search/?q=${enc}&limit=5&autocomplete=1`]){ try{ const r=await fetchT(u,6000); const a=feat(r); if(a.length) return a; }catch(e){} } return []; };
+  const eu=async()=>{ try{ const r=await fetchT(`https://photon.komoot.io/api/?q=${enc}&limit=5&lang=fr`,6000);
+    return (r.features||[]).filter(f=>f.properties.countrycode!=='FR').map(f=>{ const p=f.properties; return {label:[p.name,p.street&&p.housenumber?p.housenumber+' '+p.street:p.street,p.city&&p.city!==p.name?p.city:null,p.country].filter(Boolean).join(', '),lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0]}; }); }catch(e){ return []; } };
+  const [a,b]=await Promise.all([fr(),eu()]);
+  const best=a.length?Math.max(...a.map(x=>x.score)):0;
+  let res=best>=0.6?[...a,...b.slice(0,2)]:[...b,...a]; // nom français bien reconnu -> France d'abord, sinon l'étranger d'abord
+  if(!res.length){ try{ const r=await fetchT(`https://nominatim.openstreetmap.org/search?format=json&limit=5&accept-language=fr&q=${enc}`,8000); res=r.map(x=>({label:x.display_name,lat:+x.lat,lon:+x.lon})); }catch(e){} }
+  return res.slice(0,6);
 }
 function setupAuto(key){
   const inp=$('#'+key), list=$('#'+key+'-s'); let timer=null, seq=0;
@@ -588,7 +590,7 @@ function legEnergy(leg){
 /* ================== LISTE OFFICIELLE DES BORNES (base nationale IRVE) ==================
    Téléchargée une fois (Tesla + Powerdot de toute la France), gardée sur l'appareil 7 jours (et partagée via Firebase si configuré).
    => les bornes s'affichent même quand les serveurs OpenStreetMap sont saturés. */
-const BASE_KEY='bornesFR_v2', BASE_TTL=7*864e5; // 7 jours
+const BASE_KEY='bornesFR_v3', BASE_TTL=7*864e5; // 7 jours
 
 /* ================== FIREBASE : liste partagée entre tous tes appareils ==================
    ⚙️ Colle ici la config de ton projet Firebase (Console > Paramètres du projet > Tes applications > Config).
@@ -606,7 +608,7 @@ try{ if(FIREBASE_CONFIG&&window.firebase){ firebase.initializeApp(FIREBASE_CONFI
 const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('délai dépassé')),ms))]);
 async function readShared(){ // document Firestore bornes/france = {t, n, data (texte JSON)}
   if(!fdb) return null;
-  try{ const d=await withTimeout(fdb.collection('bornes').doc('france').get(),10000); if(!d.exists) return null; const x=d.data(); return {t:x.t,list:JSON.parse(x.data),shared:true}; }
+  try{ const d=await withTimeout(fdb.collection('bornes').doc('france').get(),10000); if(!d.exists) return null; const x=d.data(); let eu=[]; try{ eu=JSON.parse(x.dataEU||'[]'); }catch(e){} return {t:x.t,list:JSON.parse(x.data).concat(eu),shared:true,nEu:eu.length}; }
   catch(e){ console.warn('Lecture Firebase :',e); return null; }
 }
 async function writeShared(b){
@@ -674,7 +676,7 @@ async function loadBase(force){
 }
 function updateBaseInfo(){
   const b=readBase(), el=$('#baseInfo'); if(!el) return;
-  el.innerHTML=b?`<i class="ic ic-list"></i> Liste officielle des bornes : <b>${b.list.length}</b> stations Tesla / Powerdot en France, téléchargée le ${new Date(b.t).toLocaleDateString('fr-FR')} (mise à jour automatique tous les 7 jours${fdb?', <b>partagée entre tous tes appareils via Firebase</b>':', copie propre à cet appareil'}).`
+  el.innerHTML=b?`<i class="ic ic-list"></i> Liste officielle des bornes : <b>${b.list.length}</b> stations Tesla / Powerdot (France${b.nEu?`, Espagne et Italie : ${b.nEu} à l'étranger`:''}), téléchargée le ${new Date(b.t).toLocaleDateString('fr-FR')} (mise à jour automatique tous les 7 jours${fdb?', <b>partagée entre tous tes appareils via Firebase</b>':', copie propre à cet appareil'}).`
     :'<i class="ic ic-list"></i> Liste officielle des bornes : pas encore téléchargée (elle le sera au prochain calcul).';
 }
 function fromBase(a){
