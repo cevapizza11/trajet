@@ -202,7 +202,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.28/09/2026 21:52</div>
+  <div class="ver">v.30/09/2026 11:43</div>
 </header>
 
 <div class="layout">
@@ -1142,7 +1142,7 @@ function updateNav(ll){
 /* ================== BORNES DANS UNE VILLE ================== */
 setupAuto('city');
 function cityPopup(c){
-  return `<div class="pop"><b>${esc(c.name)}</b><div class="m">${c.op==='tesla'?'Tesla Supercharger':'Powerdot'} · ${c.known?Math.round(c.kw)+' kW':'puissance non renseignée'}${c.cap?' · '+esc(c.cap)+' points de charge':''}${c.slow?'<br>Borne lente (AC)':''}<br>à ${c.dist.toFixed(1).replace('.',',')} km ${c.ref||'du centre'}${addrHtml(c,true)}</div></div>`;
+  return `<div class="pop"><b>${esc(c.name)}</b><div class="m">${c.op==='tesla'?'Tesla Supercharger':'Powerdot'} · ${c.known?Math.round(c.kw)+' kW':'puissance non renseignée'}${c.cap?' · '+esc(c.cap)+' points de charge':''}${c.slow?'<br>Borne lente (AC)':''}<br>à ${c.dist.toFixed(1).replace('.',',')} km ${c.ref||'du centre'}${addrHtml(c,true)}</div>${(state.cityRes||[]).indexOf(c)>=0?`<button class="btn2" style="margin-top:8px;height:34px;font-size:13px" onclick="chargerDest(${state.cityRes.indexOf(c)})">🏁 Y aller (destination)</button>`:''}</div>`;
 }
 async function citySearch(){
   const btn=$('#cityGo'), out=$('#cityRes'); btn.disabled=true;
@@ -1167,8 +1167,8 @@ async function citySearch(){
       </div>`;
     if(!res.length) h+=`<div class="foot">Aucune borne Tesla / Powerdot dans ce rayon. Essaie un rayon plus grand.</div>`;
     else{
-      h+=`<button class="btn2" id="cityMap" style="margin-bottom:6px"><i class="ic ic-map"></i> Voir sur la carte</button><ul class="clist">`;
-      res.forEach((c,i)=>{ h+=`<li data-i="${i}" style="cursor:pointer"><span class="dot" style="background:${c.op==='tesla'?'var(--tesla)':'var(--pd)'}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>${c.dist.toFixed(1).replace('.',',')} km ${ref} · ${kwBadge(c)}${c.cap?' · '+esc(c.cap)+' points':''}</span>${addrHtml(c)}</div></li>`; });
+      h+=`<div class="grid2" style="margin-bottom:6px"><button class="btn2" id="cityMap"><i class="ic ic-map"></i> Voir sur la carte</button>${me?'':'<button class="btn2" id="cityDest"><i class="ic ic-flag"></i> Ville en destination</button>'}</div><ul class="clist">`;
+      res.forEach((c,i)=>{ h+=`<li data-i="${i}" style="cursor:pointer"><span class="dot" style="background:${c.op==='tesla'?'var(--tesla)':'var(--pd)'}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>${c.dist.toFixed(1).replace('.',',')} km ${ref} · ${kwBadge(c)}${c.cap?' · '+esc(c.cap)+' points':''}</span>${addrHtml(c)}<button class="btn2 goDest" data-i="${i}" style="margin-top:6px;height:34px;font-size:13px;width:auto;padding:0 12px"><i class="ic ic-flag"></i> Y aller (destination)</button></div></li>`; });
       h+='</ul>';
     }
     out.innerHTML=h;
@@ -1181,11 +1181,28 @@ async function citySearch(){
     map.fitBounds(L.latLng(pl.lat,pl.lon).toBounds(R*2000),{padding:[20,20]});
     const show=()=>{ const w=$('#mapwrap'); if(w.getBoundingClientRect().top>window.innerHeight*0.5) w.scrollIntoView({behavior:'smooth'}); };
     if($('#cityMap')) $('#cityMap').onclick=show;
-    out.querySelectorAll('.clist li').forEach(li=>li.onclick=e=>{ if(e.target.closest('a')) return; const i=+li.dataset.i; map.setView([res[i].lat,res[i].lon],15); mk[i].openPopup(); show(); });
+    state.cityRes=res;
+    if($('#cityDest')) $('#cityDest').onclick=()=>setDest({label:pl.label,lat:pl.lat,lon:pl.lon});
+    out.querySelectorAll('.goDest').forEach(b=>b.onclick=e=>{ e.stopPropagation(); chargerDest(+b.dataset.i); });
+    out.querySelectorAll('.clist li').forEach(li=>li.onclick=e=>{ if(e.target.closest('a,button')) return; const i=+li.dataset.i; map.setView([res[i].lat,res[i].lon],15); mk[i].openPopup(); show(); });
   }catch(e){ out.innerHTML=`<div class="alert bad">${esc(e.message||'Erreur')}</div>`; }
   btn.disabled=false;
 }
 $('#cityGo').onclick=citySearch;
+/* Mettre une ville ou une borne en destination (puis calcul automatique si le départ est connu) */
+function chargerDest(i){
+  const c=(state.cityRes||[])[i]; if(!c) return;
+  const where=c.addr||c.city||'';
+  setDest({label:c.name+(where?' — '+where:''),lat:c.lat,lon:c.lon});
+}
+window.chargerDest=chargerDest;
+function setDest(pl){
+  map.closePopup();
+  state.to={...pl}; $('#to').value=pl.label;
+  $('#to').closest('.card').scrollIntoView({behavior:'smooth',block:'start'});
+  if(state.from||$('#from').value.trim()){ setStatus('Destination : '+shortName(pl.label)+' — calcul en cours…'); setTimeout(()=>$('#go').click(),350); }
+  else { setStatus('Destination choisie : '+shortName(pl.label)+'. Indique ton départ (ou « Ma position ») puis « Calculer ».'); $('#from').focus(); }
+}
 $('#cityMe').onclick=()=>{
   const out=$('#cityRes');
   if(!navigator.geolocation){ out.innerHTML='<div class="alert bad">Ce navigateur ne donne pas accès à la position.</div>'; return; }
