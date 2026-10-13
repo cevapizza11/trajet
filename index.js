@@ -171,6 +171,9 @@ function parseDgtSite(xml, stat) {
   const name = decodeXml(texts(nameBlock)[0] || "");
   const opTxt = decodeXml(texts(opBlock).join(" "));
   const op = opCode(opTxt + " " + name);
+  // sonde de diagnostic : stations Powerdot connues (Ibis Cornellà, Diagonal Mar) -> sous quel opérateur sont-elles déclarées ?
+  if ((/maresme/i.test(xml) && /cornell/i.test(xml)) || /diagonal mar/i.test(xml) || (/ibis/i.test(name) && /cornell/i.test(xml)))
+    stat.probe.push(`${opTxt || "?"} / ${name} / ${texts(block(rest, "address")).filter((x) => !/^[a-z][a-zA-Z]*$/.test(x)).join(" ").slice(0, 60)}`);
   if (opTxt) stat.ops.set(opTxt.slice(0, 40), (stat.ops.get(opTxt.slice(0, 40)) || 0) + 1);
   if (op < 0) return null;
   const lat = firstNum(xml, "latitude"), lon = firstNum(xml, "longitude");
@@ -196,7 +199,7 @@ async function downloadDGT(ms) {
   const t0 = Date.now();
   const r = await fetch(DGT_URL, { headers: UA, signal: AbortSignal.timeout(ms) });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const dec = new TextDecoder("utf-8"), out = [], stat = { sites: 0, ops: new Map() };
+  const dec = new TextDecoder("utf-8"), out = [], stat = { sites: 0, ops: new Map(), probe: [] };
   let buf = "", bytes = 0;
   const flush = (final) => {
     RE_SITE_END.lastIndex = 0;
@@ -216,6 +219,7 @@ async function downloadDGT(ms) {
   // aide au réglage : opérateurs dont le nom ressemble à Tesla / Powerdot / Electra (avec le nombre de sites)
   const proches = [...stat.ops.entries()].filter(([k]) => /tesla|pow|dot|electr|pdot/i.test(k)).sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, v]) => `${k} (${v})`).join(" | ");
   logger.info(`DGT opérateurs proches : ${proches || "aucun"}`);
+  logger.info(`DGT sonde Powerdot (Ibis Cornellà / Diagonal Mar) : ${stat.probe.slice(0, 8).join(" || ") || "introuvable"}`);
   if (out.length < 20) throw new Error(`liste DGT trop courte (${out.length} sur ${stat.sites} sites)`);
   return out;
 }
@@ -230,7 +234,13 @@ async function downloadEU(ms) {
   // en parallèle : Espagne officielle (DGT) + OpenStreetMap Espagne (secours) + OpenStreetMap Italie
   const [dgt, osmES, osmIT] = await Promise.allSettled([downloadDGT(ms), paysOverpass("ES", ms), paysOverpass("IT", ms)]);
   const out = [], ok = [];
-  if (dgt.status === "fulfilled") { ok.push("ES"); dgt.value.forEach((c) => addDedupe(out, c)); logger.info(`Espagne : liste officielle DGT utilisée (${dgt.value.length} stations)`); }
+  if (dgt.status === "fulfilled") {
+    ok.push("ES"); dgt.value.forEach((c) => addDedupe(out, c));
+    // complément OpenStreetMap : bornes absentes de la liste DGT (ex. Powerdot, non déclarée sous son nom en Espagne)
+    let plus = 0;
+    if (osmES.status === "fulfilled") osmES.value.forEach((el) => { const c = parseOsm(el); if (c) { const n0 = out.length; addDedupe(out, c); plus += out.length - n0; } });
+    logger.info(`Espagne : liste officielle DGT utilisée (${dgt.value.length} stations) + ${plus} complétées par OpenStreetMap`);
+  }
   else {
     logger.warn(`Espagne : liste officielle DGT en échec (${dgt.reason && (dgt.reason.cause ? dgt.reason.cause.code || dgt.reason.cause.message : dgt.reason.message)}), OpenStreetMap utilisé à la place`);
     if (osmES.status === "fulfilled") { ok.push("ES"); osmES.value.forEach((el) => { const c = parseOsm(el); if (c) addDedupe(out, c); }); }
