@@ -81,6 +81,9 @@ input[type=text]:focus,input[type=time]:focus,select:focus{border-color:var(--ac
 .sugg{position:absolute;left:0;right:0;top:100%;z-index:2000;background:var(--card2);border:1px solid var(--line2);border-radius:12px;margin-top:6px;list-style:none;padding:5px;display:none;max-height:280px;overflow:auto;box-shadow:var(--shadow)}
 .sugg li{padding:11px 12px;border-radius:8px;cursor:pointer;font-size:14px}
 .sugg li:hover,.sugg li:active{background:var(--card3)}
+.sugg li.fav{display:flex;align-items:center;gap:8px}.sugg li.fav .fn{flex:1;min-width:0}.sugg li.fav small{display:block;color:var(--mut);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sugg li.fav .fdel{flex:none;width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:var(--mut)}.sugg li.fav .fdel:hover{background:var(--card);color:var(--bad)}
+.sugg li.fhead{cursor:default;padding:6px 12px 2px;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}.sugg li.fhead:hover{background:none}
 /* ---- curseurs ---- */
 .slider{margin-bottom:14px}
 .slider .top{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:var(--mut);margin-bottom:4px}
@@ -202,7 +205,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.13/10/2026 07:52</div>
+  <div class="ver">v.13/10/2026 11:14</div>
 </header>
 
 <div class="layout">
@@ -252,6 +255,7 @@ body.navmode{overflow:hidden}
         <label for="to">Arrivée</label>
         <div class="row">
           <input type="text" id="to" placeholder="Ville ou adresse" autocomplete="off">
+          <button class="ib" id="toFav" title="Enregistrer cette destination dans mes lieux favoris">☆</button>
           <button class="ib" id="swap" title="Inverser"><i class="ic ic-swap"></i></button>
         </div>
         <ul class="sugg" id="to-s"></ul>
@@ -497,16 +501,32 @@ async function geocode(q){
   if(!res.length){ try{ const r=await fetchT(`https://nominatim.openstreetmap.org/search?format=json&limit=5&accept-language=fr&q=${enc}`,8000); res=r.map(x=>({label:x.display_name,lat:+x.lat,lon:+x.lon})); }catch(e){} }
   return res.slice(0,6);
 }
+/* ---- lieux favoris : proposés en tête des suggestions de chaque champ (départ, arrivée, étapes) ---- */
+const norm=t=>String(t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+function favPlaces(q){ const n=norm(q); return (typeof perso!=='undefined'?perso.favs:[]).map((f,i)=>({f,i})).filter(x=>x.f.place&&(!n||norm(x.f.name+' '+x.f.place.label).includes(n))); }
+function favHtml(fp){ return fp.length?'<li class="fhead">★ Mes lieux favoris</li>'+fp.map(x=>`<li class="fav" data-f="${x.i}"><span>★</span><div class="fn">${esc(x.f.name)}<small>${esc(x.f.place.label)}</small></div><span class="fdel" data-del="${x.i}" title="Supprimer ce lieu favori">✕</span></li>`).join(''):''; }
+function bindFavs(key,inp,list){
+  list.querySelectorAll('li.fav').forEach(li=>li.onclick=async e=>{
+    const i=+li.dataset.f, f=perso.favs[i]; if(!f) return;
+    if(e.target.closest('.fdel')){ if(!confirm('Supprimer le lieu favori « '+f.name+' » ?')) return; perso.favs.splice(i,1); list.style.display='none'; await savePerso(); setStatus('Lieu favori supprimé'); return; }
+    state[key]={label:f.name,lat:f.place.lat,lon:f.place.lon}; inp.value=f.name; list.style.display='none';
+  });
+}
 function setupAuto(key){
   const inp=$('#'+key), list=$('#'+key+'-s'); let timer=null, seq=0;
+  const showFavs=()=>{ const fp=favPlaces(''); if(!fp.length) return; list.innerHTML=favHtml(fp); list.style.display='block'; bindFavs(key,inp,list); };
+  inp.addEventListener('focus',()=>{ if(inp.value.trim().length<3) showFavs(); });
   inp.addEventListener('input',()=>{
     state[key]=null; clearTimeout(timer);
-    const q=inp.value.trim(); if(q.length<3){ list.style.display='none'; return; }
+    const q=inp.value.trim(); if(q.length<3){ if(favPlaces('').length) showFavs(); else list.style.display='none'; return; }
+    const fp0=favPlaces(q); if(fp0.length){ list.innerHTML=favHtml(fp0); list.style.display='block'; bindFavs(key,inp,list); }
     timer=setTimeout(async()=>{
       const my=++seq; const res=await geocode(q); if(my!==seq||document.activeElement!==inp) return;
-      list.innerHTML=res.map((r,i)=>`<li data-i="${i}">${esc(r.label)}</li>`).join('');
-      list.style.display=res.length?'block':'none';
-      list.querySelectorAll('li').forEach(li=>li.onclick=()=>{ const r=res[+li.dataset.i]; state[key]=r; inp.value=r.label; list.style.display='none'; });
+      const fp=favPlaces(q);
+      list.innerHTML=favHtml(fp)+(fp.length&&res.length?'<li class="fhead">Adresses</li>':'')+res.map((r,i)=>`<li data-i="${i}">${esc(r.label)}</li>`).join('');
+      list.style.display=(res.length||fp.length)?'block':'none';
+      list.querySelectorAll('li[data-i]').forEach(li=>li.onclick=()=>{ const r=res[+li.dataset.i]; state[key]=r; inp.value=r.label; list.style.display='none'; });
+      bindFavs(key,inp,list);
     },300);
   });
   inp.addEventListener('blur',()=>setTimeout(()=>list.style.display='none',200));
@@ -645,8 +665,12 @@ try{ if(FIREBASE_CONFIG&&window.firebase){ firebase.initializeApp(FIREBASE_CONFI
 const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('délai dépassé')),ms))]);
 async function readShared(){ // document Firestore bornes/france = {t, n, data (texte JSON)}
   if(!fdb) return null;
-  try{ const d=await withTimeout(fdb.collection('bornes').doc('france').get(),10000); if(!d.exists) return null; const x=d.data(); let eu=[]; try{ eu=JSON.parse(x.dataEU||'[]'); }catch(e){} return {t:x.t,list:JSON.parse(x.data).concat(eu),shared:true,nEu:eu.length}; }
+  try{ const d=await withTimeout(fdb.collection('bornes').doc('france').get(),10000); if(!d.exists) return null; const x=d.data(); let eu=[]; try{ eu=JSON.parse(x.dataEU||'[]'); }catch(e){} return {t:x.t,tEU:x.tEU||0,list:JSON.parse(x.data).concat(eu),shared:true,nEu:eu.length,eu}; }
   catch(e){ console.warn('Lecture Firebase :',e); return null; }
+}
+async function readMeta(){ // petit document {t, tEU} : y a-t-il une liste plus récente que celle de l'appareil ?
+  if(!fdb) return null;
+  try{ const d=await withTimeout(fdb.collection('bornes').doc('meta').get(),6000); return d.exists?d.data():null; }catch(e){ return null; }
 }
 async function writeShared(b){
   if(!fdb) return;
@@ -703,16 +727,20 @@ async function loadBase(force){
   let lastTry=0; try{ lastTry=+localStorage.getItem('elTry')||0; }catch(e){}
   const okEl=x=>hasEl(x)||Date.now()-lastTry<864e5;
   let b=readBase();
-  if(b&&!force&&Date.now()-b.t<BASE_TTL&&okEl(b)) return b;
+  if(b&&!force&&Date.now()-b.t<BASE_TTL&&okEl(b)){
+    const m=await readMeta(); // nouvelle liste publiée (ex. Espagne mise à jour) ? -> on recharge
+    if(b.tEU!==undefined&&(!m||(((m.t||0)<=b.t+1000)&&((m.tEU||0)<=(b.tEU||0)+1000)))) return b; // ancienne copie (sans tEU) : rechargée une fois
+  }
   const sh=await readShared();
-  if(sh&&!force&&Date.now()-sh.t<BASE_TTL+864e5&&okEl(sh)){ save(sh); return sh; }
+  // la liste partagée (France + Espagne + Italie, mise à jour chaque lundi) est prioritaire, même en forçant
+  if(sh&&Date.now()-sh.t<BASE_TTL+864e5&&okEl(sh)){ const c={...sh}; delete c.eu; save(c); return c; }
   if(!hasEl(sh)) try{ localStorage.setItem('elTry',String(Date.now())); }catch(e){} // +1 j de marge : la Cloud Function met à jour chaque lundi
   try{
-    const list=await downloadBase(); b={t:Date.now(),list}; save(b);
-    writeShared(b); // ce téléchargement profite à tous tes appareils
+    const list=await downloadBase(), eu=(sh&&sh.eu)||[]; // on garde l'Espagne / l'Italie de la liste partagée
+    b={t:Date.now(),list:list.concat(eu),nEu:eu.length,tEU:(sh&&sh.tEU)||0}; save(b);
   }catch(e){
     console.warn('Liste officielle :',e); // téléchargement impossible : on garde la liste la plus récente disponible
-    if(sh&&(!b||sh.t>b.t)){ b=sh; save(sh); }
+    if(sh&&(!b||sh.t>b.t)){ b={...sh}; delete b.eu; save(b); }
   }
   return b;
 }
@@ -1199,7 +1227,7 @@ async function citySearch(){
     if(!res.length) h+=`<div class="foot">Aucune borne Tesla / Powerdot / Electra dans ce rayon. Essaie un rayon plus grand.</div>`;
     else{
       h+=`<div class="grid2" style="margin-bottom:6px"><button class="btn2" id="cityMap"><i class="ic ic-map"></i> Voir sur la carte</button>${me?'':'<button class="btn2" id="cityDest"><i class="ic ic-flag"></i> Ville en destination</button>'}</div><details id="cityList" style="margin-top:4px;padding:8px 10px;border:1px solid var(--line,rgba(255,255,255,.12));border-radius:12px"><summary>Voir les ${res.length} borne${res.length>1?'s':''}</summary><ul class="clist">`;
-      res.forEach((c,i)=>{ h+=`<li data-i="${i}" style="cursor:pointer"><span class="dot" style="background:${opInfo(c.op).css}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>${c.dist.toFixed(1).replace('.',',')} km ${ref} · ${kwBadge(c)}${c.cap?' · '+esc(c.cap)+' points':''}</span>${addrHtml(c)}<button class="btn2 goDest" data-i="${i}" style="margin-top:6px;height:34px;font-size:13px;width:auto;padding:0 12px"><i class="ic ic-flag"></i> Y aller (destination)</button></div></li>`; });
+      res.forEach((c,i)=>{ h+=`<li data-i="${i}" style="cursor:pointer"><span class="dot" style="background:${opInfo(c.op).css}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>${c.dist.toFixed(1).replace('.',',')} km ${ref} · ${kwBadge(c)}${c.cap?' · '+esc(c.cap)+' points':''}</span>${addrHtml(c)}<button class="btn2 goDest" data-i="${i}" style="margin-top:6px;height:34px;font-size:13px;width:auto;padding:0 12px"><i class="ic ic-flag"></i> Y aller (destination)</button> <button class="btn2 favB" data-i="${i}" style="margin-top:6px;height:34px;font-size:13px;width:auto;padding:0 12px">☆ Favori</button></div></li>`; });
       h+='</ul></details>';
     }
     out.innerHTML=h;
@@ -1215,6 +1243,10 @@ async function citySearch(){
     state.cityRes=res;
     if($('#cityDest')) $('#cityDest').onclick=()=>setDest({label:pl.label,lat:pl.lat,lon:pl.lon});
     out.querySelectorAll('.goDest').forEach(b=>b.onclick=e=>{ e.stopPropagation(); chargerDest(+b.dataset.i); });
+    out.querySelectorAll('.favB').forEach(b=>b.onclick=async e=>{ e.stopPropagation(); const c=res[+b.dataset.i]; const where=c.addr||c.city||'';
+      const name=prompt('Nom du lieu favori :',c.name+(c.city?' '+c.city:'')); if(!name) return;
+      perso.favs=perso.favs.filter(f=>!(f.place&&f.name===name)); perso.favs.push({name,place:{label:c.name+(where?' — '+where:''),lat:c.lat,lon:c.lon}});
+      await savePerso(); b.textContent='★ Favori'; setStatus('★ Lieu favori « '+name+' » enregistré'); });
     out.querySelectorAll('.clist li').forEach(li=>li.onclick=e=>{ if(e.target.closest('a,button')) return; const i=+li.dataset.i; map.setView([res[i].lat,res[i].lon],15); mk[i].openPopup(); show(); });
   }catch(e){ out.innerHTML=`<div class="alert bad">${esc(e.message||'Erreur')}</div>`; }
   btn.disabled=false;
@@ -1369,13 +1401,20 @@ async function savePerso(){
   if(fdb){ try{ await withTimeout(fdb.collection('perso').doc(syncCode()).set({favs:perso.favs,trips:perso.trips.slice(-30),t:Date.now()}),10000); }catch(e){ console.warn('Synchro :',e.message); } }
 }
 /* ---- favoris ---- */
-function renderFavs(){ const s=$('#favSel'); s.innerHTML='<option value="">★ Trajets favoris…</option>'+perso.favs.map((f,i)=>`<option value="${i}">${esc(f.name)}</option>`).join(''); }
+function renderFavs(){ const s=$('#favSel'); s.innerHTML='<option value="">★ Trajets favoris…</option>'+perso.favs.map((f,i)=>f.place?'':`<option value="${i}">${esc(f.name)}</option>`).join(''); }
+/* ---- lieu favori : enregistrer la destination (ex. « Powerdot Homps ») ---- */
+$('#toFav').onclick=async()=>{
+  let p; try{ p=await ensurePlace('to'); }catch(e){ setStatus('Indique d\'abord une destination (adresse, ville ou borne choisie avec « Y aller »)',true); return; }
+  const name=prompt('Nom du lieu favori (ex. Powerdot Homps) :',shortName(p.label)); if(!name) return;
+  perso.favs=perso.favs.filter(f=>!(f.place&&f.name===name)); perso.favs.push({name,place:{label:p.label,lat:p.lat,lon:p.lon}});
+  await savePerso(); setStatus('★ Lieu favori « '+name+' » enregistré : touche un champ Départ, Arrivée ou Étape pour le retrouver');
+};
 $('#favSave').onclick=async()=>{
   try{ await ensurePlace('from'); await ensurePlace('to'); }catch(e){ setStatus('Indique d\'abord un départ et une arrivée',true); return; }
   const vias=state.viaIds.map(id=>state[id]).filter(Boolean).map(p=>({label:p.label,lat:p.lat,lon:p.lon}));
   const name=prompt('Nom du favori :',`${shortName(state.from.label)} → ${shortName(state.to.label)}`); if(!name) return;
   const P=p=>({label:p.label,lat:p.lat,lon:p.lon});
-  perso.favs=perso.favs.filter(f=>f.name!==name); perso.favs.push({name,from:P(state.from),to:P(state.to),vias});
+  perso.favs=perso.favs.filter(f=>f.place||f.name!==name); perso.favs.push({name,from:P(state.from),to:P(state.to),vias});
   renderFavs(); $('#favSel').value=String(perso.favs.length-1); await savePerso(); setStatus('Favori « '+name+' » enregistré');
 };
 $('#favDel').onclick=async()=>{ const i=$('#favSel').value; if(i==='') return; const f=perso.favs[+i]; if(!confirm('Supprimer le favori « '+f.name+' » ?')) return; perso.favs.splice(+i,1); renderFavs(); await savePerso(); };
