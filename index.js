@@ -289,6 +289,9 @@ exports.majBornesHebdo = onSchedule(
       logger.error(`Espagne/Italie : ${msg} (ancienne liste conservée)`);
     }
 
+    // petit document « meta » (quelques octets) : l'app le lit au démarrage pour savoir s'il y a une nouvelle liste
+    try { const fin = (await ref.get()).data() || {}; await admin.firestore().collection("bornes").doc("meta").set({ t: fin.t || 0, tEU: fin.tEU || 0, nFr: fin.nFr || 0, nEu: fin.nEu || 0 }); }
+    catch (e) { logger.warn(`meta : ${e.message}`); }
     logger.info(`Terminé en ${Math.round((Date.now() - debut) / 1000)} s — France ${frOk ? "OK" : "échec"}, Espagne/Italie ${euOk ? "OK" : "échec"}`);
     if (!frOk && !euOk) throw new Error("aucune source disponible : nouvel essai automatique");
   }
