@@ -138,7 +138,7 @@ details summary{cursor:pointer;font-weight:700;padding:2px 0;list-style:none;dis
 details summary::-webkit-details-marker{display:none}
 details summary .ic{color:var(--acc2)}
 details summary::after{content:"";margin-left:auto;width:8px;height:8px;border-right:2px solid var(--mut);border-bottom:2px solid var(--mut);transform:rotate(45deg);transition:transform .2s;margin-right:4px}
-details[open] summary::after{transform:rotate(-135deg)}
+details[open] > summary::after{transform:rotate(-135deg)}
 /* ---- listes de bornes ---- */
 .clist{list-style:none;padding:0;margin:10px 0 0}
 .clist li{display:flex;align-items:center;gap:10px;padding:11px 0;border-top:1px solid var(--line);font-size:13px}
@@ -202,11 +202,35 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.30/09/2026 11:43</div>
+  <div class="ver">v.13/10/2026 07:44</div>
 </header>
 
 <div class="layout">
   <div id="side">
+    <div class="card">
+      <details id="cityBox">
+        <summary><i class="ic ic-search"></i>Bornes dans une ville</summary>
+        <div style="margin-top:10px">
+          <div class="field">
+            <label for="city">Ville</label>
+            <div class="row">
+              <input type="text" id="city" placeholder="Ex. : Narbonne" autocomplete="off">
+              <button class="ib" id="cityMe" title="Autour de ma position"><i class="ic ic-locate"></i></button>
+              <select id="cityR" style="width:auto;flex:none">
+                <option value="3">3 km</option>
+                <option value="5" selected>5 km</option>
+                <option value="10">10 km</option>
+                <option value="20">20 km</option>
+              </select>
+            </div>
+            <ul class="sugg" id="city-s"></ul>
+          </div>
+          <button class="btn" id="cityGo" style="height:46px;font-size:15px"><i class="ic ic-search"></i>Voir les bornes</button>
+          <div id="cityRes" style="margin-top:10px"></div>
+        </div>
+      </details>
+    </div>
+
     <div class="card">
       <h2><i class="ic ic-route"></i>Trajet</h2>
       <div class="row" style="margin-bottom:12px">
@@ -250,30 +274,6 @@ body.navmode{overflow:hidden}
         <div><label for="prefOp">Bornes préférées</label>
           <select id="prefOp"><option value="none">Indifférent</option><option value="powerdot">Powerdot d'abord</option><option value="tesla">Tesla d'abord</option></select></div>
       </div>
-    </div>
-
-    <div class="card">
-      <details id="cityBox">
-        <summary><i class="ic ic-search"></i>Bornes dans une ville</summary>
-        <div style="margin-top:10px">
-          <div class="field">
-            <label for="city">Ville</label>
-            <div class="row">
-              <input type="text" id="city" placeholder="Ex. : Narbonne" autocomplete="off">
-              <button class="ib" id="cityMe" title="Autour de ma position"><i class="ic ic-locate"></i></button>
-              <select id="cityR" style="width:auto;flex:none">
-                <option value="3">3 km</option>
-                <option value="5" selected>5 km</option>
-                <option value="10">10 km</option>
-                <option value="20">20 km</option>
-              </select>
-            </div>
-            <ul class="sugg" id="city-s"></ul>
-          </div>
-          <button class="btn" id="cityGo" style="height:46px;font-size:15px"><i class="ic ic-search"></i>Voir les bornes</button>
-          <div id="cityRes" style="margin-top:10px"></div>
-        </div>
-      </details>
     </div>
 
     <div class="card">
@@ -1167,9 +1167,9 @@ async function citySearch(){
       </div>`;
     if(!res.length) h+=`<div class="foot">Aucune borne Tesla / Powerdot dans ce rayon. Essaie un rayon plus grand.</div>`;
     else{
-      h+=`<div class="grid2" style="margin-bottom:6px"><button class="btn2" id="cityMap"><i class="ic ic-map"></i> Voir sur la carte</button>${me?'':'<button class="btn2" id="cityDest"><i class="ic ic-flag"></i> Ville en destination</button>'}</div><ul class="clist">`;
+      h+=`<div class="grid2" style="margin-bottom:6px"><button class="btn2" id="cityMap"><i class="ic ic-map"></i> Voir sur la carte</button>${me?'':'<button class="btn2" id="cityDest"><i class="ic ic-flag"></i> Ville en destination</button>'}</div><details id="cityList" style="margin-top:4px;padding:8px 10px;border:1px solid var(--line,rgba(255,255,255,.12));border-radius:12px"><summary>Voir les ${res.length} borne${res.length>1?'s':''}</summary><ul class="clist">`;
       res.forEach((c,i)=>{ h+=`<li data-i="${i}" style="cursor:pointer"><span class="dot" style="background:${c.op==='tesla'?'var(--tesla)':'var(--pd)'}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>${c.dist.toFixed(1).replace('.',',')} km ${ref} · ${kwBadge(c)}${c.cap?' · '+esc(c.cap)+' points':''}</span>${addrHtml(c)}<button class="btn2 goDest" data-i="${i}" style="margin-top:6px;height:34px;font-size:13px;width:auto;padding:0 12px"><i class="ic ic-flag"></i> Y aller (destination)</button></div></li>`; });
-      h+='</ul>';
+      h+='</ul></details>';
     }
     out.innerHTML=h;
     // carte
@@ -1477,7 +1477,7 @@ function renderResults(){
     <div class="acts"><button class="btn2" onclick="shareRecap()"><i class="ic ic-share"></i>Partager</button><button class="btn2" onclick="copyRecap()"><i class="ic ic-copy"></i>Copier</button></div>
     <div class="foot" id="recapMsg" style="margin-top:6px"></div></details></div>`;
   if(state.chargers.length){
-    h+=`<div class="card"><details open><summary>Toutes les bornes sur le trajet (${state.chargers.length})</summary>`;
+    h+=`<div class="card"><details><summary>Toutes les bornes sur le trajet (${state.chargers.length})</summary>`;
     if(state.widened) h+=`<div class="alert info" style="margin-top:8px">Peu de bornes à moins de ${$('#radius').value} km : affichage élargi jusqu'à ${state.widened} km de la route.</div>`;
     h+=`<div class="foot" style="margin-top:6px">Touche + pour t'y arrêter. Le % est la batterie estimée en passant devant ; « pour finir » = recharge nécessaire si tu t'arrêtes là pour aller jusqu'au bout sans autre arrêt.</div><ul class="clist">`;
     state.chargers.forEach(c=>{ const on=state.stops.some(x=>x.id===c.id), sa=socAt(c);
