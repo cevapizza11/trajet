@@ -1,8 +1,8 @@
 /* =====================================================================
    Trajet Model 3 — mise à jour automatique de la liste des bornes
    Chaque lundi à 4 h (heure de Paris) :
-   1. télécharge la base nationale officielle IRVE (Tesla + Powerdot) pour la France
-      + les Superchargers Tesla et bornes Powerdot d'Espagne et d'Italie (OpenStreetMap)
+   1. télécharge la base nationale officielle IRVE (Tesla + Powerdot + Electra) pour la France
+      + les bornes Tesla, Powerdot et Electra d'Espagne et d'Italie (OpenStreetMap)
    2. la regroupe par station (format compact identique à l'app)
    3. l'enregistre dans Firestore : bornes/france  { t, n, nFr, nEu, data, dataEU }
       (la France est enregistrée tout de suite, l'Europe ensuite, avec un temps limité)
@@ -19,6 +19,12 @@ const ODS = [
   { host: "https://public.opendatasoft.com", ds: "mobilityref-france-irve-220" },
 ];
 
+// 0 = Tesla, 1 = Powerdot, 2 = Electra (« Electrabel » etc. exclus)
+function opCode(txt) {
+  txt = String(txt || "").toLowerCase();
+  return txt.includes("tesla") ? 0 : /power ?dot/.test(txt) ? 1 : /(^|[^a-z])electra([^a-z]|$)/.test(txt) ? 2 : -1;
+}
+
 async function getJSON(url, ms) {
   const r = await fetch(url, { signal: AbortSignal.timeout(ms) });
   if (!r.ok) throw new Error(`HTTP ${r.status} sur ${url}`);
@@ -30,7 +36,7 @@ function groupBase(rows, f) {
   const m = new Map();
   for (const r of rows) {
     const txt = [r[f.op], r[f.en], r[f.st]].filter(Boolean).join(" ").toLowerCase();
-    const op = txt.includes("tesla") ? 0 : /power ?dot/.test(txt) ? 1 : -1;
+    const op = opCode(txt);
     if (op < 0) continue;
     let lat, lon;
     const g = f.geo && r[f.geo];
@@ -70,7 +76,7 @@ async function downloadBase() {
       };
       if (!f.kw || !(f.geo || f.xy) || !(f.op || f.en)) throw new Error("format de données inattendu");
       const sel = [...new Set(Object.values(f).filter(Boolean))].join(",");
-      const where = '"tesla" OR "powerdot" OR "power dot"';
+      const where = '"tesla" OR "powerdot" OR "power dot" OR "electra"';
       const rows = await getJSON(`${api}/exports/json?select=${encodeURIComponent(sel)}&where=${encodeURIComponent(where)}`, 120000);
       const list = groupBase(rows, f);
       if (list.length < 20) throw new Error(`liste trop courte (${list.length})`);
@@ -100,7 +106,7 @@ function parseOsm(el) {
   if (lat == null || lon == null) return null;
   if (t.access === "private" || t.access === "no") return null;
   const txt = [t.operator, t.brand, t.name, t.network].filter(Boolean).join(" ").toLowerCase();
-  const op = txt.includes("tesla") ? 0 : /power ?dot/.test(txt) ? 1 : -1;
+  const op = opCode(txt);
   if (op < 0) return null;
   if (op === 0 && /destination/.test(txt)) return null; // chargeurs "destination" (lents, hôtels)
   let kw = 0;
@@ -110,7 +116,7 @@ function parseOsm(el) {
     (str.match(/[\d.]+/g) || []).forEach((n) => { let x = parseFloat(n); if (isW && x > 1000) x /= 1000; if (x > kw && x <= 400) kw = x; });
   }
   const addr = [[t["addr:housenumber"], t["addr:street"]].filter(Boolean).join(" "), [t["addr:postcode"], t["addr:city"]].filter(Boolean).join(" ")].filter(Boolean).join(", ");
-  return [+(+lat).toFixed(5), +(+lon).toFixed(5), op, kw, String(t.name || (op === 0 ? "Tesla Supercharger" : "Powerdot")).slice(0, 60),
+  return [+(+lat).toFixed(5), +(+lon).toFixed(5), op, kw, String(t.name || ["Tesla Supercharger", "Powerdot", "Electra"][op]).slice(0, 60),
     parseInt(t.capacity, 10) || 1, String(t["addr:city"] || "").slice(0, 40), addr.slice(0, 90)];
 }
 
@@ -119,7 +125,7 @@ const UA = { "User-Agent": "TrajetModel3/1.0 (maj hebdo bornes)" };
 // Un pays : on interroge tous les serveurs Overpass EN MÊME TEMPS, le premier qui répond gagne.
 async function paysOverpass(code, ms) {
   // On lit UNE seule fois toutes les bornes du pays, puis on filtre (beaucoup plus rapide, surtout pour l'Italie)
-  const f = ["operator", "brand", "network", "name"].map((k) => `nwr.b["${k}"~"tesla|power ?dot",i];`).join("");
+  const f = ["operator", "brand", "network", "name"].map((k) => `nwr.b["${k}"~"tesla|power ?dot|electra",i];`).join("");
   const q = `[out:json][timeout:${Math.floor(ms / 1000) - 10}][maxsize:268435456];area["ISO3166-1"="${code}"][admin_level=2]->.p;nwr["amenity"="charging_station"](area.p)->.b;(${f});out center tags;`;
   const stop = new AbortController();
   let gagne = false;
