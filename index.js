@@ -151,24 +151,93 @@ async function paysOverpass(code, ms) {
   } finally { clearTimeout(timer); stop.abort(); }
 }
 
-async function downloadEU(ms) {
-  const res = await Promise.allSettled(PAYS_EU.map((c) => paysOverpass(c, ms)));
-  const out = [], ok = [];
-  res.forEach((r, i) => {
-    if (r.status !== "fulfilled") return;
-    ok.push(PAYS_EU[i]);
-    for (const el of r.value) {
-      const c = parseOsm(el); if (!c) continue;
-      // doublons (même opérateur à moins de ~120 m) : on garde la plus puissante
-      const dup = out.find((o) => o[2] === c[2] && Math.abs(o[0] - c[0]) < 0.0011 && Math.abs(o[1] - c[1]) < 0.0015);
-      if (dup) { if (c[3] > dup[3]) dup[3] = c[3]; if (!dup[7] && c[7]) dup[7] = c[7]; } else out.push(c);
+/* ---------- Espagne : liste OFFICIELLE de la DGT (Punto de Acceso Nacional, DATEX II) ----------
+   Tous les opérateurs espagnols sont obligés d'y déclarer leurs bornes (loi 7/2021).
+   Gros fichier XML (~80 Mo) : lu en flux, site par site, sans tout charger en mémoire. */
+const DGT_URL = "https://infocar.dgt.es/datex2/v3/miterd/EnergyInfrastructureTablePublication/electrolineras.xml";
+const tag = (n) => `(?:[\\w-]+:)?${n}`;
+const RE_SITE_END = new RegExp(`</${tag("energyInfrastructureSite")}>`, "g");
+const RE_SITE_START = new RegExp(`<${tag("energyInfrastructureSite")}[\\s>]`);
+function texts(xml) { return [...xml.matchAll(/>([^<>]+)</g)].map((m) => m[1].trim()).filter((x) => x && !/^[-\d.\s]+$/.test(x)); }
+function block(xml, name) { const m = xml.match(new RegExp(`<${tag(name)}[\\s>][\\s\\S]*?</${tag(name)}>`)); return m ? m[0] : ""; }
+function firstNum(xml, name) { const m = xml.match(new RegExp(`<${tag(name)}>\\s*(-?[\\d.]+)\\s*<`)); return m ? +m[1] : NaN; }
+function decodeXml(x) { return x.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'"); }
+
+function parseDgtSite(xml, stat) {
+  stat.sites++;
+  const opBlock = block(xml, "operator");
+  const rest = opBlock ? xml.replace(opBlock, "") : xml;
+  const nameBlock = block(rest, "name");
+  const name = decodeXml(texts(nameBlock)[0] || "");
+  const opTxt = decodeXml(texts(opBlock).join(" "));
+  const op = opCode(opTxt + " " + name);
+  if (opTxt) stat.ops.set(opTxt.slice(0, 40), (stat.ops.get(opTxt.slice(0, 40)) || 0) + 1);
+  if (op < 0) return null;
+  const lat = firstNum(xml, "latitude"), lon = firstNum(xml, "longitude");
+  if (!isFinite(lat) || !isFinite(lon)) return null;
+  let kw = 0;
+  for (const m of xml.matchAll(new RegExp(`<${tag("(?:maxPowerAtSocket|availableChargingPower|maximumPower|power)")}>\\s*([\\d.]+)\\s*<`, "g"))) {
+    let x = +m[1]; if (x > 1000) x /= 1000; if (x > kw && x <= 400) kw = x;
+  }
+  const pts = (xml.match(new RegExp(`<${tag("refillPoint")}[\\s>]`, "g")) || []).length || 1;
+  // adresse : lignes d'adresse (rue, code postal, ville…) ; les mots-clés techniques (« street », « town »…) sont ignorés
+  const lines = [...rest.matchAll(new RegExp(`<${tag("addressLine")}[\\s>][\\s\\S]*?</${tag("addressLine")}>`, "g"))].map((m) => {
+    const ty = (m[0].match(new RegExp(`<${tag("type")}>\\s*([^<]+?)\\s*<`)) || [])[1] || "";
+    return { ty, val: texts(m[0]).filter((x) => x !== ty && !/^[a-z][a-zA-Z]*$/.test(x)).map(decodeXml).join(" ") };
+  }).filter((l) => l.val);
+  let city = "", addrTxt = [];
+  if (lines.length) { addrTxt = lines.map((l) => l.val); city = (lines.find((l) => /town|city|municipal|place/i.test(l.ty)) || {}).val || ""; }
+  else addrTxt = texts(block(rest, "address")).filter((x) => !/^[a-z][a-zA-Z]*$/.test(x)).map(decodeXml);
+  return [+lat.toFixed(5), +lon.toFixed(5), op, kw, (name || ["Tesla Supercharger", "Powerdot", "Electra"][op]).slice(0, 60), pts,
+    city.slice(0, 40), [...new Set(addrTxt)].join(", ").replace(/\s+/g, " ").slice(0, 90)];
+}
+
+async function downloadDGT(ms) {
+  const t0 = Date.now();
+  const r = await fetch(DGT_URL, { headers: UA, signal: AbortSignal.timeout(ms) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const dec = new TextDecoder("utf-8"), out = [], stat = { sites: 0, ops: new Map() };
+  let buf = "", bytes = 0;
+  const flush = (final) => {
+    RE_SITE_END.lastIndex = 0;
+    let cut = 0, m;
+    while ((m = RE_SITE_END.exec(buf))) {
+      const end = m.index + m[0].length, chunk = buf.slice(cut, end);
+      const st = chunk.search(RE_SITE_START);
+      if (st >= 0) { const c = parseDgtSite(chunk.slice(st), stat); if (c) out.push(c); }
+      cut = end;
     }
-  });
+    buf = final ? "" : buf.slice(cut);
+  };
+  for await (const part of r.body) { bytes += part.length; buf += dec.decode(part, { stream: true }); if (buf.length > 2e6) flush(false); }
+  buf += dec.decode(); flush(true);
+  const top = [...stat.ops.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k} (${v})`).join(", ");
+  logger.info(`DGT Espagne : ${Math.round(bytes / 1e6)} Mo lus en ${Math.round((Date.now() - t0) / 1000)} s, ${stat.sites} sites, ${out.length} Tesla/Powerdot/Electra. Principaux opérateurs : ${top}`);
+  if (out.length < 20) throw new Error(`liste DGT trop courte (${out.length} sur ${stat.sites} sites)`);
+  return out;
+}
+
+function addDedupe(out, c) {
+  // doublons (même opérateur à moins de ~120 m) : on garde la plus puissante
+  const dup = out.find((o) => o[2] === c[2] && Math.abs(o[0] - c[0]) < 0.0011 && Math.abs(o[1] - c[1]) < 0.0015);
+  if (dup) { if (c[3] > dup[3]) dup[3] = c[3]; if (!dup[7] && c[7]) dup[7] = c[7]; if (c[5] > dup[5]) dup[5] = c[5]; } else out.push(c);
+}
+
+async function downloadEU(ms) {
+  // en parallèle : Espagne officielle (DGT) + OpenStreetMap Espagne (secours) + OpenStreetMap Italie
+  const [dgt, osmES, osmIT] = await Promise.allSettled([downloadDGT(ms), paysOverpass("ES", ms), paysOverpass("IT", ms)]);
+  const out = [], ok = [];
+  if (dgt.status === "fulfilled") { ok.push("ES"); dgt.value.forEach((c) => addDedupe(out, c)); logger.info(`Espagne : liste officielle DGT utilisée (${dgt.value.length} stations)`); }
+  else {
+    logger.warn(`Espagne : liste officielle DGT en échec (${dgt.reason && (dgt.reason.cause ? dgt.reason.cause.code || dgt.reason.cause.message : dgt.reason.message)}), OpenStreetMap utilisé à la place`);
+    if (osmES.status === "fulfilled") { ok.push("ES"); osmES.value.forEach((el) => { const c = parseOsm(el); if (c) addDedupe(out, c); }); }
+  }
+  if (osmIT.status === "fulfilled") { ok.push("IT"); osmIT.value.forEach((el) => { const c = parseOsm(el); if (c) addDedupe(out, c); }); }
   return { out, ok };
 }
 
 exports.majBornesHebdo = onSchedule(
-  { schedule: "every monday 04:00", timeZone: "Europe/Paris", region: "europe-west1", timeoutSeconds: 540, memory: "512MiB", retryCount: 2 },
+  { schedule: "every monday 04:00", timeZone: "Europe/Paris", region: "europe-west1", timeoutSeconds: 540, memory: "1GiB", retryCount: 2 },
   async () => {
     const debut = Date.now();
     const ref = admin.firestore().collection("bornes").doc("france");
