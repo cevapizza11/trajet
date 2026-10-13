@@ -170,10 +170,9 @@ function parseDgtSite(xml, stat) {
   const nameBlock = block(rest, "name");
   const name = decodeXml(texts(nameBlock)[0] || "");
   const opTxt = decodeXml(texts(opBlock).join(" "));
-  const op = opCode(opTxt + " " + name);
-  // sonde de diagnostic : stations Powerdot connues (Ibis Cornellà, Diagonal Mar) -> sous quel opérateur sont-elles déclarées ?
-  if ((/maresme/i.test(xml) && /cornell/i.test(xml)) || /diagonal mar/i.test(xml) || (/ibis/i.test(name) && /cornell/i.test(xml)))
-    stat.probe.push(`${opTxt || "?"} / ${name} / ${texts(block(rest, "address")).filter((x) => !/^[a-z][a-zA-Z]*$/.test(x)).join(" ").slice(0, 60)}`);
+  // En Espagne, Powerdot déclare ses bornes à la DGT sous le nom de société « Punto Recargas SL »
+  // (vérifié sur Ibis Cornellà, Novotel Cornellà et C.C. Diagonal Mar, toutes Powerdot)
+  const op = /punto\s*recargas/i.test(opTxt) ? 1 : opCode(opTxt + " " + name);
   if (opTxt) stat.ops.set(opTxt.slice(0, 40), (stat.ops.get(opTxt.slice(0, 40)) || 0) + 1);
   if (op < 0) return null;
   const lat = firstNum(xml, "latitude"), lon = firstNum(xml, "longitude");
@@ -199,7 +198,7 @@ async function downloadDGT(ms) {
   const t0 = Date.now();
   const r = await fetch(DGT_URL, { headers: UA, signal: AbortSignal.timeout(ms) });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const dec = new TextDecoder("utf-8"), out = [], stat = { sites: 0, ops: new Map(), probe: [] };
+  const dec = new TextDecoder("utf-8"), out = [], stat = { sites: 0, ops: new Map() };
   let buf = "", bytes = 0;
   const flush = (final) => {
     RE_SITE_END.lastIndex = 0;
@@ -217,9 +216,8 @@ async function downloadDGT(ms) {
   const n = [0, 1, 2].map((k) => out.filter((c) => c[2] === k).length);
   logger.info(`DGT Espagne : ${Math.round(bytes / 1e6)} Mo lus en ${Math.round((Date.now() - t0) / 1000)} s, ${stat.sites} sites -> Tesla ${n[0]}, Powerdot ${n[1]}, Electra ${n[2]}`);
   // aide au réglage : opérateurs dont le nom ressemble à Tesla / Powerdot / Electra (avec le nombre de sites)
-  const proches = [...stat.ops.entries()].filter(([k]) => /tesla|pow|dot|electr|pdot/i.test(k)).sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, v]) => `${k} (${v})`).join(" | ");
+  const proches = [...stat.ops.entries()].filter(([k]) => /tesla|pow|dot|electr|pdot|punto recargas/i.test(k)).sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, v]) => `${k} (${v})`).join(" | ");
   logger.info(`DGT opérateurs proches : ${proches || "aucun"}`);
-  logger.info(`DGT sonde Powerdot (Ibis Cornellà / Diagonal Mar) : ${stat.probe.slice(0, 8).join(" || ") || "introuvable"}`);
   if (out.length < 20) throw new Error(`liste DGT trop courte (${out.length} sur ${stat.sites} sites)`);
   return out;
 }
