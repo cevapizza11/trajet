@@ -211,8 +211,11 @@ async function downloadDGT(ms) {
   };
   for await (const part of r.body) { bytes += part.length; buf += dec.decode(part, { stream: true }); if (buf.length > 2e6) flush(false); }
   buf += dec.decode(); flush(true);
-  const top = [...stat.ops.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k} (${v})`).join(", ");
-  logger.info(`DGT Espagne : ${Math.round(bytes / 1e6)} Mo lus en ${Math.round((Date.now() - t0) / 1000)} s, ${stat.sites} sites, ${out.length} Tesla/Powerdot/Electra. Principaux opérateurs : ${top}`);
+  const n = [0, 1, 2].map((k) => out.filter((c) => c[2] === k).length);
+  logger.info(`DGT Espagne : ${Math.round(bytes / 1e6)} Mo lus en ${Math.round((Date.now() - t0) / 1000)} s, ${stat.sites} sites -> Tesla ${n[0]}, Powerdot ${n[1]}, Electra ${n[2]}`);
+  // aide au réglage : opérateurs dont le nom ressemble à Tesla / Powerdot / Electra (avec le nombre de sites)
+  const proches = [...stat.ops.entries()].filter(([k]) => /tesla|pow|dot|electr|pdot/i.test(k)).sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, v]) => `${k} (${v})`).join(" | ");
+  logger.info(`DGT opérateurs proches : ${proches || "aucun"}`);
   if (out.length < 20) throw new Error(`liste DGT trop courte (${out.length} sur ${stat.sites} sites)`);
   return out;
 }
