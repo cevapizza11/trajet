@@ -16,7 +16,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
-:root{--bg:#0a0b0d;--card:#131519;--card2:#1b1e24;--card3:#23272e;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.14);--txt:#f2f4f7;--mut:#8b93a1;--tesla:#e31937;--pd:#14b8c6;--stop:#f5b301;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;--acc:#3e6ae1;--acc2:#5b82f0;--glass:rgba(19,21,25,.82);--r:14px;--shadow:0 8px 24px rgba(0,0,0,.35)}
+:root{--bg:#0a0b0d;--card:#131519;--card2:#1b1e24;--card3:#23272e;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.14);--txt:#f2f4f7;--mut:#8b93a1;--tesla:#e31937;--pd:#14b8c6;--el:#a3e635;--stop:#f5b301;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;--acc:#3e6ae1;--acc2:#5b82f0;--glass:rgba(19,21,25,.82);--r:14px;--shadow:0 8px 24px rgba(0,0,0,.35)}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.45 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-feature-settings:"tnum" 1,"cv11" 1;-webkit-font-smoothing:antialiased}
 .ic{display:inline-block;width:1.05em;height:1.05em;flex:none;vertical-align:-.17em;background:currentColor;-webkit-mask:var(--i) center/contain no-repeat;mask:var(--i) center/contain no-repeat}
@@ -202,7 +202,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.13/10/2026 07:44</div>
+  <div class="ver">v.13/10/2026 07:52</div>
 </header>
 
 <div class="layout">
@@ -272,7 +272,7 @@ body.navmode{overflow:hidden}
         <div><label for="strategy">Stratégie de recharge</label>
           <select id="strategy"><option value="short">Arrêts courts</option><option value="few">Le moins d'arrêts</option></select></div>
         <div><label for="prefOp">Bornes préférées</label>
-          <select id="prefOp"><option value="none">Indifférent</option><option value="powerdot">Powerdot d'abord</option><option value="tesla">Tesla d'abord</option></select></div>
+          <select id="prefOp"><option value="none">Indifférent</option><option value="powerdot">Powerdot d'abord</option><option value="powerdot,electra">Powerdot, puis Electra</option><option value="electra">Electra d'abord</option><option value="electra,powerdot">Electra, puis Powerdot</option><option value="tesla">Tesla d'abord</option></select></div>
       </div>
     </div>
 
@@ -340,11 +340,20 @@ body.navmode{overflow:hidden}
             <input type="range" id="tollRate" min="0.08" max="0.16" step="0.005" value="0.11">
           </div>
           <div class="grid2">
-            <div><label for="priceTesla">Prix Tesla (€/kWh)</label><input type="text" inputmode="decimal" id="priceTesla" value="0,45"></div>
+            <div><label for="priceTesla">Tesla heures pleines (€/kWh)</label><input type="text" inputmode="decimal" id="priceTesla" value="0,45"></div>
+            <div><label for="priceTeslaHC">Tesla heures creuses (€/kWh)</label><input type="text" inputmode="decimal" id="priceTeslaHC" value="0,35"></div>
+          </div>
+          <div class="grid2">
+            <div><label for="hpStart">Heures pleines Tesla : de</label><select id="hpStart"></select></div>
+            <div><label for="hpEnd">à</label><select id="hpEnd"></select></div>
+          </div>
+          <div class="grid2">
             <div><label for="pricePd">Prix Powerdot (€/kWh)</label><input type="text" inputmode="decimal" id="pricePd" value="0,49"></div>
+            <div><label for="priceEl">Prix Electra (€/kWh)</label><input type="text" inputmode="decimal" id="priceEl" value="0,49"></div>
           </div>
           <label class="chk"><input type="checkbox" id="opTesla" checked><span class="dot" style="background:var(--tesla)"></span> Tesla Superchargers</label>
           <label class="chk"><input type="checkbox" id="opPd" checked><span class="dot" style="background:var(--pd)"></span> Powerdot</label>
+          <label class="chk"><input type="checkbox" id="opEl" checked><span class="dot" style="background:var(--el)"></span> Electra</label>
           <div class="alert info" id="rulesTxt" style="margin-top:8px"></div>
           <div class="alert info" id="baseInfo"></div>
           <div class="field">
@@ -372,6 +381,7 @@ body.navmode{overflow:hidden}
     <div class="legend">
       <div><span class="dot" style="background:var(--tesla)"></span>Tesla</div>
       <div><span class="dot" style="background:var(--pd)"></span>Powerdot</div>
+      <div><span class="dot" style="background:var(--el)"></span>Electra</div>
       <div><span class="dot" style="background:var(--stop)"></span>Arrêt prévu</div>
     </div>
   </div>
@@ -394,6 +404,15 @@ function whPerKm(v){ v=Math.max(15,Math.min(v,150)); return 72 + 0.00625*v*v + 8
 const OVERPASS = ['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://overpass.kumi.systems/api/interpreter','https://maps.mail.ru/osm/tools/overpass/api/interpreter'];
 const OSRM_SERVERS = ['https://router.project-osrm.org/route/v1/driving/','https://routing.openstreetmap.de/routed-car/route/v1/driving/'];
 
+/* ================== OPÉRATEURS ================== */
+const OPS={ tesla:{name:'Tesla',long:'Tesla Supercharger',color:'#e82127',css:'var(--tesla)'},
+  powerdot:{name:'Powerdot',long:'Powerdot',color:'#12b5cb',css:'var(--pd)'},
+  electra:{name:'Electra',long:'Electra',color:'#a3e635',css:'var(--el)'} };
+function opInfo(op){ return OPS[op]||OPS.powerdot; }
+// reconnaît l'opérateur dans un texte (nom, enseigne, opérateur…) ; « Electrabel » etc. exclus
+function opFromText(txt){ txt=String(txt||'').toLowerCase(); return txt.includes('tesla')?'tesla':/power ?dot/.test(txt)?'powerdot':/(^|[^a-z])electra([^a-z]|$)/.test(txt)?'electra':null; }
+function opsOn(){ return {tesla:$('#opTesla').checked,powerdot:$('#opPd').checked,electra:$('#opEl').checked}; }
+
 /* ================== OUTILS ================== */
 const $ = s => document.querySelector(s);
 const state = { from:null, to:null, base:null, prof:null, chargers:[], stops:[], route:null, sim:null, planError:null, viaIds:[], vias:[], points:[], alt:null };
@@ -411,7 +430,8 @@ function settings(){ return { soc:+$('#soc').value, resCh:+$('#resCh').value, re
 function pctClass(p,min){ return p<0?'bad' : p<min?'warn' : 'ok'; }
 
 /* ================== RÉGLAGES MÉMORISÉS ================== */
-const SAVE_IDS=['soc','resCh','resDest','maxT','adj','cond','radius','auto','opTesla','opPd','noToll','tollRate','maxMin','maxDrive','strategy','prefOp','priceTesla','pricePd','hwSpeed'];
+(function(){ const o=[...Array(24).keys()].map(h=>`<option value="${h}">${h} h</option>`).join(''); const a=document.getElementById('hpStart'), b=document.getElementById('hpEnd'); a.innerHTML=o; b.innerHTML=o; a.value='16'; b.value='22'; })();
+const SAVE_IDS=['soc','resCh','resDest','maxT','adj','cond','radius','auto','opTesla','opPd','noToll','tollRate','maxMin','maxDrive','strategy','prefOp','priceTesla','pricePd','hwSpeed','opEl','priceEl','priceTeslaHC','hpStart','hpEnd'];
 function saveSettings(){ try{ const o={}; SAVE_IDS.forEach(id=>{const el=$('#'+id); o[id]=el.type==='checkbox'?el.checked:el.value;}); localStorage.setItem('trajetM3',JSON.stringify(o)); }catch(e){} }
 function loadSettings(){ try{ const o=JSON.parse(localStorage.getItem('trajetM3')||'{}'); SAVE_IDS.forEach(id=>{ if(o[id]===undefined) return; const el=$('#'+id); if(el.type==='checkbox') el.checked=o[id]; else el.value=o[id]; }); }catch(e){} }
 function fillRanges(){ document.querySelectorAll('input[type=range]').forEach(r=>{ const p=(r.value-r.min)/(r.max-r.min)*100; r.style.setProperty('--p',p+'%'); }); }
@@ -431,16 +451,21 @@ function refreshLabels(){
     '• recharger au maximum jusqu\'à '+$('#maxT').value+' %<br>'+
     (few?'• stratégie « le moins d\'arrêts » : recharges aussi longues que nécessaire, sans limite de durée<br>'
         :'• stratégie « arrêts courts » : recharge limitée à '+$('#maxMin').value+' min par arrêt (quitte à s\'arrêter plus souvent)<br>')+
-    '• bornes préférées : '+({none:'indifférent',powerdot:'Powerdot d\'abord (Tesla seulement si aucune Powerdot atteignable)',tesla:'Tesla d\'abord (Powerdot seulement si aucune Tesla atteignable)'}[$('#prefOp').value])+'<br>'+
+    '• bornes préférées : '+prefTxt()+'<br>'+
+    '• réseaux utilisés : '+Object.keys(OPS).filter(k=>opsOn()[k]).map(k=>OPS[k].name).join(', ')+'<br>'+
+    '• prix : Tesla '+fmtP('#priceTesla')+' en heures pleines ('+$('#hpStart').value+' h – '+$('#hpEnd').value+' h), '+fmtP('#priceTeslaHC')+' en heures creuses (selon l\'heure d\'arrivée prévue à la borne) · Powerdot '+fmtP('#pricePd')+' · Electra '+fmtP('#priceEl')+'<br>'+
     '• puissance réelle : les bornes de 100 kW et plus sont privilégiées, quitte à s\'arrêter un peu plus tôt<br>'+
     '• vitesse sur autoroute pour la consommation : '+(+$('#hwSpeed').value?$('#hwSpeed').value+' km/h (voies rapides : 110 km/h max.)':'celle prévue par le GPS')+'<br>'+
     '• bornes lentes (< 40 kW) affichées sur la carte mais jamais choisies automatiquement<br>'+
     '• '+(few?'pas de pause imposée (mode « le moins d\'arrêts »)':md?'une pause au moins toutes les '+fmtDur(md)+' de conduite':'pas de pause imposée (arrêts seulement selon la batterie)');
   $('#tollRate-v').textContent=(+$('#tollRate').value).toFixed(3).replace('.',',')+' €/km';
 }
+function fmtP(id){ return String($(id).value).replace('.',',')+' €/kWh'; }
+function prefList(){ const v=$('#prefOp').value; return v&&v!=='none'?v.split(','):[]; }
+function prefTxt(){ const l=prefList(); if(!l.length) return 'indifférent'; return l.map(k=>OPS[k].name).join(' puis ')+' d\'abord (les autres réseaux seulement si aucune de ces bornes n\'est atteignable)'; }
 loadSettings(); refreshLabels();
 SAVE_IDS.forEach(id=>$('#'+id).addEventListener('input',()=>{refreshLabels();saveSettings();}));
-SAVE_IDS.forEach(id=>$('#'+id).addEventListener('change',saveSettings));
+SAVE_IDS.forEach(id=>$('#'+id).addEventListener('change',()=>{refreshLabels();saveSettings();}));
 
 /* heure de départ : maintenant par défaut, remise à jour à chaque calcul tant qu'on ne l'a pas modifiée */
 setDepNow(); $('#depTime').addEventListener('input',()=>depTouched=true); $('#depNow').onclick=()=>{ setDepNow(); if(state.sim) renderResults(); };
@@ -600,9 +625,9 @@ function legEnergy(leg){
 
 /* ================== BORNES (OpenStreetMap / Overpass) ================== */
 /* ================== LISTE OFFICIELLE DES BORNES (base nationale IRVE) ==================
-   Téléchargée une fois (Tesla + Powerdot de toute la France), gardée sur l'appareil 7 jours (et partagée via Firebase si configuré).
+   Téléchargée une fois (Tesla + Powerdot + Electra de toute la France), gardée sur l'appareil 7 jours (et partagée via Firebase si configuré).
    => les bornes s'affichent même quand les serveurs OpenStreetMap sont saturés. */
-const BASE_KEY='bornesFR_v3', BASE_TTL=7*864e5; // 7 jours
+const BASE_KEY='bornesFR_v4', BASE_TTL=7*864e5; // 7 jours
 
 /* ================== FIREBASE : liste partagée entre tous tes appareils ==================
    ⚙️ Colle ici la config de ton projet Firebase (Console > Paramètres du projet > Tes applications > Config).
@@ -636,7 +661,7 @@ function groupBase(rows,f){
   const m=new Map();
   for(const r of rows){
     const txt=[r[f.op],r[f.en],r[f.st]].filter(Boolean).join(' ').toLowerCase();
-    const op=txt.includes('tesla')?0:(/power ?dot/.test(txt)?1:-1); if(op<0) continue;
+    const o=opFromText(txt), op=o==='tesla'?0:o==='powerdot'?1:o==='electra'?2:-1; if(op<0) continue;
     let lat,lon; const g=f.geo&&r[f.geo];
     if(g&&typeof g==='object'){ lat=+g.lat; lon=+g.lon; }
     else if(f.xy&&r[f.xy]){ const x=String(r[f.xy]).match(/-?\d+(\.\d+)?/g); if(x&&x.length>=2){ lon=+x[0]; lat=+x[1]; } }
@@ -662,7 +687,7 @@ async function downloadBase(){
         geo:(F.find(x=>x.type==='geo_point_2d')||{}).name, xy:find(/coordonnees/i), city:find(/^consolidated_commune$/,/^commune$/,/commune/), addr:find(/^adresse_station$/,/adresse/) };
       if(!f.kw||!(f.geo||f.xy)||!(f.op||f.en)) throw new Error('format inattendu');
       const sel=[...new Set(Object.values(f).filter(Boolean))].join(',');
-      const rows=await fetchT(`${api}/exports/json?select=${encodeURIComponent(sel)}&where=${encodeURIComponent('"tesla" OR "powerdot" OR "power dot"')}`,60000);
+      const rows=await fetchT(`${api}/exports/json?select=${encodeURIComponent(sel)}&where=${encodeURIComponent('"tesla" OR "powerdot" OR "power dot" OR "electra"')}`,60000);
       const list=groupBase(rows,f);
       if(list.length<20) throw new Error('liste trop courte');
       return list;
@@ -673,10 +698,15 @@ async function downloadBase(){
 // Ordre : copie de l'appareil (si < 7 j) -> Firebase partagé (si < 7 j) -> téléchargement officiel (puis envoi dans Firebase)
 async function loadBase(force){
   const save=x=>{ try{ localStorage.setItem(BASE_KEY,JSON.stringify(x)); }catch(e){} };
+  // liste sans aucune borne Electra (ancienne version) : on retente le téléchargement complet, au plus une fois par jour
+  const hasEl=x=>x&&x.list.some(a=>a[2]===2);
+  let lastTry=0; try{ lastTry=+localStorage.getItem('elTry')||0; }catch(e){}
+  const okEl=x=>hasEl(x)||Date.now()-lastTry<864e5;
   let b=readBase();
-  if(b&&!force&&Date.now()-b.t<BASE_TTL) return b;
+  if(b&&!force&&Date.now()-b.t<BASE_TTL&&okEl(b)) return b;
   const sh=await readShared();
-  if(sh&&!force&&Date.now()-sh.t<BASE_TTL+864e5){ save(sh); return sh; } // +1 j de marge : la Cloud Function met à jour chaque lundi
+  if(sh&&!force&&Date.now()-sh.t<BASE_TTL+864e5&&okEl(sh)){ save(sh); return sh; }
+  if(!hasEl(sh)) try{ localStorage.setItem('elTry',String(Date.now())); }catch(e){} // +1 j de marge : la Cloud Function met à jour chaque lundi
   try{
     const list=await downloadBase(); b={t:Date.now(),list}; save(b);
     writeShared(b); // ce téléchargement profite à tous tes appareils
@@ -688,12 +718,12 @@ async function loadBase(force){
 }
 function updateBaseInfo(){
   const b=readBase(), el=$('#baseInfo'); if(!el) return;
-  el.innerHTML=b?`<i class="ic ic-list"></i> Liste officielle des bornes : <b>${b.list.length}</b> stations Tesla / Powerdot (France${b.nEu?`, Espagne et Italie : ${b.nEu} à l'étranger`:''}), téléchargée le ${new Date(b.t).toLocaleDateString('fr-FR')} (mise à jour automatique tous les 7 jours${fdb?', <b>partagée entre tous tes appareils via Firebase</b>':', copie propre à cet appareil'}).`
+  el.innerHTML=b?`<i class="ic ic-list"></i> Liste officielle des bornes : <b>${b.list.length}</b> stations Tesla / Powerdot / Electra (France${b.nEu?`, Espagne et Italie : ${b.nEu} à l'étranger`:''}), téléchargée le ${new Date(b.t).toLocaleDateString('fr-FR')} (mise à jour automatique tous les 7 jours${fdb?', <b>partagée entre tous tes appareils via Firebase</b>':', copie propre à cet appareil'}).`
     :'<i class="ic ic-list"></i> Liste officielle des bornes : pas encore téléchargée (elle le sera au prochain calcul).';
 }
 function fromBase(a){
-  const [lat,lon,o,kw,name,n,city,addr]=a, op=o===0?'tesla':'powerdot';
-  return {id:'b'+lat+','+lon,op,lat,lon,kw:kw||(op==='tesla'?150:50),known:kw>0,slow:kw>0&&kw<40,name:name||(op==='tesla'?'Tesla Supercharger':'Powerdot'),cap:n?String(n):'',city:city||'',addr:addr||'',hours:''};
+  const [lat,lon,o,kw,name,n,city,addr]=a, op=o===0?'tesla':o===2?'electra':'powerdot';
+  return {id:'b'+lat+','+lon,op,lat,lon,kw:kw||(op==='tesla'?150:50),known:kw>0,slow:kw>0&&kw<40,name:name||opInfo(op).long,cap:n?String(n):'',city:city||'',addr:addr||'',hours:''};
 }
 function routeBox(prof,km){
   let a=90,b=180,c=-90,d=-180; for(const [lo,la] of prof.coords){ if(la<a)a=la; if(la>c)c=la; if(lo<b)b=lo; if(lo>d)d=lo; }
@@ -701,7 +731,7 @@ function routeBox(prof,km){
 }
 // Combine les 2 sources : liste officielle (cache) + OpenStreetMap (si le serveur répond)
 async function getChargers(prof,rmax){
-  setStatus('Recherche des bornes Tesla et Powerdot…');
+  setStatus('Recherche des bornes Tesla, Powerdot et Electra…');
   const base=await (basePromise||(basePromise=loadBase()));
   basePromise=null; updateBaseInfo();
   const out=[]; let ok=false; state.src={base:0,osm:false};
@@ -725,7 +755,7 @@ async function fetchChargers(prof,radiusKm,ms){
     boxes.push(`${(a-mLat).toFixed(3)},${(b-mLon).toFixed(3)},${(c+mLat).toFixed(3)},${(d+mLon).toFixed(3)}`);
     s=e;
   }
-  const parts=boxes.map(bb=>['operator','brand','network','name'].map(k=>`nwr["amenity"="charging_station"]["${k}"~"tesla|power ?dot",i](${bb});`).join('')).join('');
+  const parts=boxes.map(bb=>['operator','brand','network','name'].map(k=>`nwr["amenity"="charging_station"]["${k}"~"tesla|power ?dot|electra",i](${bb});`).join('')).join('');
   const q=`[out:json][timeout:60];(${parts});out center tags;`;
   const tries=OVERPASS.map(ep=>(async()=>{
     const ctl=new AbortController(), tm=setTimeout(()=>ctl.abort(),ms||25000);
@@ -745,7 +775,7 @@ function parseCharger(el){
   if(lat==null||lon==null) return null;
   if(t.access==='private'||t.access==='no') return null;
   const txt=[t.operator,t.brand,t.name,t.network].filter(Boolean).join(' ').toLowerCase();
-  const op=txt.includes('tesla')?'tesla':(/power ?dot/.test(txt)?'powerdot':null);
+  const op=opFromText(txt);
   if(!op) return null;
   if(op==='tesla'&&/destination/.test(txt)) return null; // chargeurs "destination" (lents)
   let kw=0;
@@ -757,7 +787,7 @@ function parseCharger(el){
   const slow=kw>0&&kw<40; // borne lente (AC) : affichée mais jamais proposée automatiquement
   const known=kw>0; if(!kw) kw=op==='tesla'?150:50;
   return { id:el.type+el.id, op, lat, lon, kw, known, slow,
-    name:t.name||(op==='tesla'?'Tesla Supercharger':'Powerdot'),
+    name:t.name||opInfo(op).long,
     cap:t.capacity||'', city:t['addr:city']||'', hours:t.opening_hours||'',
     addr:[[t['addr:housenumber'],t['addr:street']].filter(Boolean).join(' '),[t['addr:postcode'],t['addr:city']].filter(Boolean).join(' ')].filter(Boolean).join(', ') };
 }
@@ -776,7 +806,7 @@ function autoPlan(prof,chargers,s){
   const cap=CAR.usable, E=prof.E, T=prof.T, last=E.length-1, cons=0.17*factor();
   const short=s.strategy!=='few'; // "arrêts courts" (défaut) ou "le moins d'arrêts"
   const resCh=s.resCh/100*cap, resDest=s.resDest/100*cap, maxT=s.maxT/100*cap, maxDrive=short?(s.maxDrive||0):0;
-  const opName={powerdot:'Powerdot',tesla:'Tesla'};
+  const pref=(s.prefOp&&s.prefOp!=='none')?s.prefOp.split(','):[];
   const sorted=chargers.slice().sort((a,b)=>a.km-b.km);
   let posIdx=0, soc=s.soc/100*cap, back=0; const plan=[], notes=[];
   for(let k=0;k<40;k++){
@@ -791,10 +821,10 @@ function autoPlan(prof,chargers,s){
     }
     // opérateur préféré : on ne garde que ses bornes s'il y en a une atteignable
     let reach=reachAll;
-    if(s.prefOp&&s.prefOp!=='none'){
-      const r2=reachAll.filter(x=>x.c.op===s.prefOp);
-      if(r2.length) reach=r2;
-      else notes.push(`Arrêt ${plan.length+1} : aucune borne ${opName[s.prefOp]} atteignable sur ce tronçon, une autre borne est proposée.`);
+    if(pref.length){
+      let found=false;
+      for(const op of pref){ const r2=reachAll.filter(x=>x.c.op===op); if(r2.length){ reach=r2; found=true; if(op!==pref[0]) notes.push(`Arrêt ${plan.length+1} : aucune borne ${OPS[pref[0]].name} atteignable sur ce tronçon, une borne ${OPS[op].name} est proposée.`); break; } }
+      if(!found) notes.push(`Arrêt ${plan.length+1} : aucune borne ${pref.map(k=>OPS[k].name).join(' ni ')} atteignable sur ce tronçon, une autre borne est proposée.`);
     }
     // limite de temps de conduite avant pause (mode arrêts courts)
     let pool0=maxDrive?reach.filter(x=>T[x.c.idx]-T[posIdx]<=maxDrive):reach;
@@ -906,12 +936,12 @@ $('#go').onclick=async()=>{
     try{ const r=await osrm([state.from,...state.vias,state.to],!noToll); state.alt={noToll:!noToll,km:r.distance/1000,min:r.duration/60,tollKm:tollKm(r)}; }catch(e){}
     state.stops=[]; state.planError=null; state.planNotes=[]; state.chargers=[]; layers.city.clearLayers();
     drawRoute(state.base,true); map.fitBounds(L.geoJSON(state.base.geometry).getBounds(),{padding:[30,30]});
-    setStatus('Recherche des bornes Tesla et Powerdot le long du trajet…');
+    setStatus('Recherche des bornes Tesla, Powerdot et Electra le long du trajet…');
     let raw=[];
     const R=+$('#radius').value, RMAX=Math.max(R,15);
     try{ raw=await getChargers(state.prof,RMAX); }
     catch(e){ state.planError='Aucune source de bornes disponible pour l\'instant ('+(e.name==='AbortError'?'délai dépassé':e.message)+'). Réessaie dans une minute.'; }
-    const ops={tesla:$('#opTesla').checked,powerdot:$('#opPd').checked};
+    const ops=opsOn();
     state.chargers=dedupe(raw.filter(c=>c&&ops[c.op]));
     state.chargers.forEach(c=>project(c,state.prof));
     const all=state.chargers; state.chargers=all.filter(c=>c.off<=R); state.widened=false;
@@ -1128,7 +1158,7 @@ function updateNav(ll){
   const chargeAhead=kmMax=>state.sim.steps.filter(s=>s.stop&&s.stop.km>km+0.3&&s.stop.km<kmMax).reduce((a,s)=>a+s.mins,0);
   const toDest=(T[T.length-1]-T[i])+chargeAhead(1e9);
   let t=`<i class="ic ic-pin"></i> Km <b>${Math.round(km)}</b> / ${Math.round(tot)} · reste ${Math.round(tot-km)} km · <i class="ic ic-battery"></i> prévu ici ≈ <b class="pct ${pctClass(soc,settings().resCh)}">${Math.round(soc)} %</b><br><i class="ic ic-flag"></i> Arrivée ≈ <b>${at(toDest)}</b> (dans ${fmtDur(toDest)}) avec <b class="pct ${pctClass(state.sim.arrive,settings().resDest)}">${Math.round(state.sim.arrive)} %</b>`;
-  if(next&&next!==stop){ const m=(T[next.idx]-T[i])+chargeAhead(next.km); t+=`<br><i class="ic ic-bolt"></i> Prochaine borne : <b>${esc(next.name)}</b> (${next.op==='tesla'?'Tesla':'Powerdot'}${next.known?' '+Math.round(next.kw)+' kW':''}) dans <b>${Math.round(next.km-km)} km</b> · ≈ ${at(m)} · <i class="ic ic-battery"></i> ${Math.round(socAt(next))} % · ${needHtml(next,true)}`; }
+  if(next&&next!==stop){ const m=(T[next.idx]-T[i])+chargeAhead(next.km); t+=`<br><i class="ic ic-bolt"></i> Prochaine borne : <b>${esc(next.name)}</b> (${opInfo(next.op).name}${next.known?' '+Math.round(next.kw)+' kW':''}) dans <b>${Math.round(next.km-km)} km</b> · ≈ ${at(m)} · <i class="ic ic-battery"></i> ${Math.round(socAt(next))} % · ${needHtml(next,true)}`; }
   else if(!next) t+='<br><i class="ic ic-bolt"></i> Plus de borne rapide d\'ici l\'arrivée';
   if(stop){ const st=state.sim.steps.find(s=>s.stop===stop); t+=`<br><span class="dot" style="background:var(--stop)"></span> Arrêt prévu : ${esc(stop.name)} dans ${Math.round(stop.km-km)} km · ≈ ${at((T[stop.idx]-T[i])+chargeAhead(stop.km))} · arrivée avec <b class="pct ${pctClass(socAt(stop),settings().resCh)}">${Math.round(socAt(stop))} %</b>${st?' · recharge ≈ '+fmtDur(st.mins):''}`; }
   t+=`<br><span style="font-size:12px;color:var(--mut)"><i class="ic ic-compass"></i> ${curSpeed!=null?Math.round(curSpeed*3.6)+' km/h':'vitesse ?'} · cap ${Math.round(heading)}°${headingUp&&(curSpeed==null||curSpeed<2.5)?' · carte figée tant que tu ne roules pas':''}</span>`;
@@ -1142,7 +1172,7 @@ function updateNav(ll){
 /* ================== BORNES DANS UNE VILLE ================== */
 setupAuto('city');
 function cityPopup(c){
-  return `<div class="pop"><b>${esc(c.name)}</b><div class="m">${c.op==='tesla'?'Tesla Supercharger':'Powerdot'} · ${c.known?Math.round(c.kw)+' kW':'puissance non renseignée'}${c.cap?' · '+esc(c.cap)+' points de charge':''}${c.slow?'<br>Borne lente (AC)':''}<br>à ${c.dist.toFixed(1).replace('.',',')} km ${c.ref||'du centre'}${addrHtml(c,true)}</div>${(state.cityRes||[]).indexOf(c)>=0?`<button class="btn2" style="margin-top:8px;height:34px;font-size:13px" onclick="chargerDest(${state.cityRes.indexOf(c)})">🏁 Y aller (destination)</button>`:''}</div>`;
+  return `<div class="pop"><b>${esc(c.name)}</b><div class="m">${opInfo(c.op).long} · ${c.known?Math.round(c.kw)+' kW':'puissance non renseignée'}${c.cap?' · '+esc(c.cap)+' points de charge':''}${c.slow?'<br>Borne lente (AC)':''}<br>à ${c.dist.toFixed(1).replace('.',',')} km ${c.ref||'du centre'}${addrHtml(c,true)}</div>${(state.cityRes||[]).indexOf(c)>=0?`<button class="btn2" style="margin-top:8px;height:34px;font-size:13px" onclick="chargerDest(${state.cityRes.indexOf(c)})">🏁 Y aller (destination)</button>`:''}</div>`;
 }
 async function citySearch(){
   const btn=$('#cityGo'), out=$('#cityRes'); btn.disabled=true;
@@ -1152,23 +1182,24 @@ async function citySearch(){
     const pl=await ensurePlace('city');
     const base=await (basePromise||(basePromise=loadBase())); basePromise=null; updateBaseInfo();
     if(!base||!base.list.length) throw new Error('La liste des bornes n\'est pas encore disponible sur cet appareil. Réessaie dans un instant (connexion nécessaire la première fois).');
-    const R=+$('#cityR').value, ops={tesla:$('#opTesla').checked,powerdot:$('#opPd').checked};
+    const R=+$('#cityR').value, ops=opsOn();
     const res=base.list.map(fromBase).filter(c=>ops[c.op])
       .map(c=>{ c.dist=distM([pl.lat,pl.lon],[c.lat,c.lon])/1000; return c; })
       .filter(c=>c.dist<=R).sort((a,b)=>a.dist-b.dist);
     res.forEach(c=>c.ref=(pl.me?'de toi':'du centre'));
     const nom=pl.label.split(',')[0], me=!!pl.me, ref=me?'de toi':'du centre';
     const stat=op=>{ const l=res.filter(c=>c.op===op); return {n:l.length,pts:l.reduce((a,c)=>a+(+c.cap||0),0),fast:l.filter(c=>!c.slow).length}; };
-    const T=stat('tesla'), P=stat('powerdot');
+    const T=stat('tesla'), P=stat('powerdot'), El=stat('electra');
     let h=`<div class="alert info"><b>${me?'Autour de toi':esc(nom)}</b> (rayon ${R} km) : <b>${res.length}</b> station${res.length>1?'s':''}</div>
-      <div class="sum" style="grid-template-columns:1fr 1fr">
+      <div class="sum" style="grid-template-columns:1fr 1fr 1fr">
         <div><small><span class="dot" style="background:var(--tesla)"></span> Tesla</small><b>${T.n} station${T.n>1?'s':''}</b><small>${T.pts} points · ${T.fast} rapide${T.fast>1?'s':''}</small></div>
         <div><small><span class="dot" style="background:var(--pd)"></span> Powerdot</small><b>${P.n} station${P.n>1?'s':''}</b><small>${P.pts} points · ${P.fast} rapide${P.fast>1?'s':''}</small></div>
+        <div><small><span class="dot" style="background:var(--el)"></span> Electra</small><b>${El.n} station${El.n>1?'s':''}</b><small>${El.pts} points · ${El.fast} rapide${El.fast>1?'s':''}</small></div>
       </div>`;
-    if(!res.length) h+=`<div class="foot">Aucune borne Tesla / Powerdot dans ce rayon. Essaie un rayon plus grand.</div>`;
+    if(!res.length) h+=`<div class="foot">Aucune borne Tesla / Powerdot / Electra dans ce rayon. Essaie un rayon plus grand.</div>`;
     else{
       h+=`<div class="grid2" style="margin-bottom:6px"><button class="btn2" id="cityMap"><i class="ic ic-map"></i> Voir sur la carte</button>${me?'':'<button class="btn2" id="cityDest"><i class="ic ic-flag"></i> Ville en destination</button>'}</div><details id="cityList" style="margin-top:4px;padding:8px 10px;border:1px solid var(--line,rgba(255,255,255,.12));border-radius:12px"><summary>Voir les ${res.length} borne${res.length>1?'s':''}</summary><ul class="clist">`;
-      res.forEach((c,i)=>{ h+=`<li data-i="${i}" style="cursor:pointer"><span class="dot" style="background:${c.op==='tesla'?'var(--tesla)':'var(--pd)'}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>${c.dist.toFixed(1).replace('.',',')} km ${ref} · ${kwBadge(c)}${c.cap?' · '+esc(c.cap)+' points':''}</span>${addrHtml(c)}<button class="btn2 goDest" data-i="${i}" style="margin-top:6px;height:34px;font-size:13px;width:auto;padding:0 12px"><i class="ic ic-flag"></i> Y aller (destination)</button></div></li>`; });
+      res.forEach((c,i)=>{ h+=`<li data-i="${i}" style="cursor:pointer"><span class="dot" style="background:${opInfo(c.op).css}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>${c.dist.toFixed(1).replace('.',',')} km ${ref} · ${kwBadge(c)}${c.cap?' · '+esc(c.cap)+' points':''}</span>${addrHtml(c)}<button class="btn2 goDest" data-i="${i}" style="margin-top:6px;height:34px;font-size:13px;width:auto;padding:0 12px"><i class="ic ic-flag"></i> Y aller (destination)</button></div></li>`; });
       h+='</ul></details>';
     }
     out.innerHTML=h;
@@ -1177,7 +1208,7 @@ async function citySearch(){
     const mk=[];
     L.marker([pl.lat,pl.lon],{icon:L.divIcon({className:'',html:me?'<div class="pinB">•</div>':'<div class="pinV">★</div>',iconSize:[26,26],iconAnchor:[13,13]})}).addTo(layers.city);
     L.circle([pl.lat,pl.lon],{radius:R*1000,color:'#9b6bff',weight:1,fillOpacity:.04,interactive:false}).addTo(layers.city);
-    res.forEach(c=>{ const m=L.circleMarker([c.lat,c.lon],{radius:c.slow?6:9,color:'#111',weight:2,fillColor:c.op==='tesla'?'#e82127':'#12b5cb',fillOpacity:c.slow?.6:1}).bindPopup(()=>cityPopup(c)).addTo(layers.city); mk.push(m); });
+    res.forEach(c=>{ const m=L.circleMarker([c.lat,c.lon],{radius:c.slow?6:9,color:'#111',weight:2,fillColor:opInfo(c.op).color,fillOpacity:c.slow?.6:1}).bindPopup(()=>cityPopup(c)).addTo(layers.city); mk.push(m); });
     map.fitBounds(L.latLng(pl.lat,pl.lon).toBounds(R*2000),{padding:[20,20]});
     const show=()=>{ const w=$('#mapwrap'); if(w.getBoundingClientRect().top>window.innerHeight*0.5) w.scrollIntoView({behavior:'smooth'}); };
     if($('#cityMap')) $('#cityMap').onclick=show;
@@ -1237,7 +1268,7 @@ function buildRecap(){
     if(st.via) L.push(`• Passage ${st.via.name} vers ${clock(tArr)} (${Math.round(st.arrive)} %)`);
     if(st.stop){
       const c=st.stop; tt+=st.mins;
-      L.push(`⚡ ${st.no}. ${c.name} — ${c.op==='tesla'?'Tesla':'Powerdot'}${c.known?' '+Math.round(c.kw)+' kW':''}`);
+      L.push(`⚡ ${st.no}. ${c.name} — ${opInfo(c.op).name}${c.known?' '+Math.round(c.kw)+' kW':''}`);
       if(c.addr||c.city) L.push(`   ${c.addr||c.city}`);
       L.push(`   Arrivée ${clock(tArr)} à ${Math.round(st.arrive)} % → charger à ${Math.round(st.target)} % (≈ ${fmtDur(st.mins)}) → départ ${clock(tt)}`);
       L.push(`   Waze : https://waze.com/ul?ll=${c.lat},${c.lon}&navigate=yes`);
@@ -1310,10 +1341,14 @@ async function fetchWeather(){
   }catch(e){ console.warn('Météo indisponible :',e.message); }
 }
 /* ================== COÛT ================== */
-function price(op){ const v=parseFloat(String($(op==='tesla'?'#priceTesla':'#pricePd').value).replace(',','.')); return isFinite(v)?v:0.45; }
+function num(id,d){ const v=parseFloat(String($(id).value).replace(',','.')); return isFinite(v)?v:d; }
+function isHP(date){ const h=date.getHours(), a=+$('#hpStart').value, b=+$('#hpEnd').value; return a===b?true:a<b?(h>=a&&h<b):(h>=a||h<b); }
+// prix au kWh selon le réseau (et, pour Tesla, selon l'heure d'arrivée à la borne : heures pleines / creuses)
+function price(op,date){ if(op==='tesla') return (date&&!isHP(date))?num('#priceTeslaHC',0.35):num('#priceTesla',0.45); return op==='electra'?num('#priceEl',0.49):num('#pricePd',0.49); }
+function stopCost(st,tArr){ const k=Math.max(0,st.target-Math.max(st.arrive,0))/100*CAR.usable*1.08, d=new Date(depDate().getTime()+tArr*60000), p=price(st.stop.op,d); return {kwh:k,eur:k*p,p,hc:st.stop.op==='tesla'&&!isHP(d)}; }
 function chargeCost(){
   let eur=0,kwh=0; if(!state.sim) return {eur,kwh};
-  state.sim.steps.forEach(st=>{ if(!st.stop) return; const k=Math.max(0,st.target-Math.max(st.arrive,0))/100*CAR.usable*1.08; kwh+=k; eur+=k*price(st.stop.op); }); // +8 % de pertes à la charge
+  let tt=0; state.sim.steps.forEach(st=>{ tt+=st.legMin; if(!st.stop) return; const c=stopCost(st,tt); tt+=st.mins; kwh+=c.kwh; eur+=c.eur; }); // +8 % de pertes à la charge
   return {eur,kwh};
 }
 function altCost(cc,tc,sim){ const a=state.alt; if(!a) return 0; const avg=cc.kwh?cc.eur/cc.kwh:0.47;
@@ -1404,7 +1439,7 @@ function drawRoute(route,isBase){
 function popupHtml(c){
   const on=state.stops.some(s=>s.id===c.id);
   return `<div class="pop"><b>${esc(c.name)}</b>
-  <div class="m">${c.op==='tesla'?'Tesla Supercharger':'Powerdot'} · ${c.known?Math.round(c.kw)+' kW':'puissance non renseignée'}${c.cap?' · '+esc(c.cap)+' points':''}<br>
+  <div class="m">${opInfo(c.op).long} · ${c.known?Math.round(c.kw)+' kW':'puissance non renseignée'}${c.cap?' · '+esc(c.cap)+' points':''}<br>
   Km ${Math.round(c.km)} du trajet · à ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route${c.city?' · '+esc(c.city):''}${c.slow?'<br>Borne lente (AC)':''}${addrHtml(c,true)}<br><i class="ic ic-battery"></i> Batterie estimée en passant : <b>${Math.round(socAt(c))} %</b><br><i class="ic ic-clock"></i> Passage ≈ <b>${clock(timeAt(c))}</b><br>${needHtml(c)}</div>
   <button class="btn2" onclick="toggleStop('${c.id}')">${on?'✕ Retirer de mon trajet':'＋ Ajouter à mon trajet'}</button></div>`;
 }
@@ -1415,7 +1450,7 @@ function drawAll(){
     const idx=state.stops.findIndex(s=>s.id===c.id);
     let m;
     if(idx>=0) m=L.marker([c.lat,c.lon],{icon:L.divIcon({className:'',html:`<div class="stopicon">${idx+1}</div>`,iconSize:[28,28],iconAnchor:[14,14]}),zIndexOffset:1000});
-    else m=L.circleMarker([c.lat,c.lon],{radius:c.slow?5:8,color:'#111',weight:2,fillColor:c.op==='tesla'?'#e82127':'#12b5cb',fillOpacity:c.slow?.6:1});
+    else m=L.circleMarker([c.lat,c.lon],{radius:c.slow?5:8,color:'#111',weight:2,fillColor:opInfo(c.op).color,fillOpacity:c.slow?.6:1});
     m.bindPopup(()=>popupHtml(c)); m.addTo(layers.chargers);
   });
   const pin=(p,cls,t)=>L.marker([p.lat,p.lon],{icon:L.divIcon({className:'',html:`<div class="${cls}">${t}</div>`,iconSize:[26,26],iconAnchor:[13,13]})}).addTo(layers.pins);
@@ -1449,7 +1484,7 @@ function renderResults(){
   (state.planNotes||[]).forEach(n=>h+=`<div class="alert info">${esc(n)}</div>`);
   if(state.planError) h+=`<div class="alert bad">${esc(state.planError)}</div>`;
   sim.warns.forEach(w=>h+=`<div class="alert ${w.lvl}">${esc(w.t)}</div>`);
-  if(!state.chargers.length&&!state.planError) h+=`<div class="alert info">Aucune borne Tesla/Powerdot trouvée à moins de ${$('#radius').value} km de la route. Élargis l'écart dans les réglages.</div>`;
+  if(!state.chargers.length&&!state.planError) h+=`<div class="alert info">Aucune borne Tesla/Powerdot/Electra trouvée à moins de ${$('#radius').value} km de la route. Élargis l'écart dans les réglages.</div>`;
   h+=`<ul class="tl"><li><div class="ico" style="background:var(--ok);color:#fff">A</div><div class="t">${esc(state.from.label)}</div><div class="s">Départ à <b>${clock(0)}</b> avec <span class="pct ok">${s.soc} %</span></div></li>`;
   let tt=0; // minutes écoulées depuis le départ
   sim.steps.forEach((st,i)=>{
@@ -1462,9 +1497,10 @@ function renderResults(){
       const c=st.stop;
       h+=`<li><div class="ico" style="background:var(--stop)">${st.no}</div>
       <div class="t">${esc(c.name)}</div>
-      <div class="s">${c.op==='tesla'?'Tesla':'Powerdot'} · ${kwBadge(c)}${c.known&&c.kw<100?' <span style="color:var(--warn)">charge plus lente</span>':''} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route</div>
+      <div class="s">${opInfo(c.op).name} · ${kwBadge(c)}${c.known&&c.kw<100?' <span style="color:var(--warn)">charge plus lente</span>':''} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route</div>
       ${addrHtml(c)}
       <div class="s"><i class="ic ic-clock"></i> Arrivée <b>${clock(tArr)}</b> avec <span class="pct ${pctClass(st.arrive,s.resCh)}">${Math.round(st.arrive)} %</span> → charger à <span class="pct ok">${Math.round(st.target)} %</span> · ≈ ${fmtDur(st.mins)} → reprise de la route <b>${clock(tt)}</b></div>
+      ${(()=>{ const k=stopCost(st,tArr); return `<div class="s">💶 ≈ <b>${euros(k.eur)}</b> (${Math.round(k.kwh)} kWh à ${k.p.toFixed(2).replace('.',',')} €${c.op==='tesla'?(k.hc?' · heures creuses':' · heures pleines'):''})</div>`; })()}
       <div class="tgt"><span>Repartir avec</span><button onclick="adjTarget('${c.id}',-5)" aria-label="moins">−</button><b class="pct ok">${Math.round(st.target)} %</b><button onclick="adjTarget('${c.id}',5)" aria-label="plus">+</button>${st.manual?`<button class="auto" onclick="adjTarget('${c.id}',0)">auto</button><span class="manu">réglé par toi</span>`:'<span class="manu">calcul auto</span>'}${st.mins>settings().maxMin+0.5?`<span class="manu" style="color:var(--warn)">> ${settings().maxMin} min</span>`:''}</div>
       <div class="acts"><a class="btn2" target="_blank" rel="noopener" href="https://waze.com/ul?ll=${c.lat},${c.lon}&navigate=yes">Waze</a><button class="btn2" onclick="toggleStop('${c.id}')">✕ Retirer</button></div></li>`;
     }
@@ -1481,7 +1517,7 @@ function renderResults(){
     if(state.widened) h+=`<div class="alert info" style="margin-top:8px">Peu de bornes à moins de ${$('#radius').value} km : affichage élargi jusqu'à ${state.widened} km de la route.</div>`;
     h+=`<div class="foot" style="margin-top:6px">Touche + pour t'y arrêter. Le % est la batterie estimée en passant devant ; « pour finir » = recharge nécessaire si tu t'arrêtes là pour aller jusqu'au bout sans autre arrêt.</div><ul class="clist">`;
     state.chargers.forEach(c=>{ const on=state.stops.some(x=>x.id===c.id), sa=socAt(c);
-      h+=`<li><span class="dot" style="background:${c.op==='tesla'?'var(--tesla)':'var(--pd)'}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>Km ${Math.round(c.km)} · ${kwBadge(c)} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route · <i class="ic ic-battery"></i> <b class="pct ${pctClass(sa,settings().resCh)}">${Math.round(sa)} %</b></span><span class="addr"><i class="ic ic-clock"></i> Passage ≈ <b>${clock(timeAt(c))}</b> · ${needHtml(c)}</span>${addrHtml(c)}</div><button class="add ${on?'on':''}" onclick="toggleStop('${c.id}')">${on?'✓':'+'}</button></li>`; });
+      h+=`<li><span class="dot" style="background:${opInfo(c.op).css}"></span><div class="n"><b>${esc(c.name)}${c.slow?'<span class="slowtag">lente</span>':''}</b><span>Km ${Math.round(c.km)} · ${kwBadge(c)} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route · <i class="ic ic-battery"></i> <b class="pct ${pctClass(sa,settings().resCh)}">${Math.round(sa)} %</b></span><span class="addr"><i class="ic ic-clock"></i> Passage ≈ <b>${clock(timeAt(c))}</b> · ${needHtml(c)}</span>${addrHtml(c)}</div><button class="add ${on?'on':''}" onclick="toggleStop('${c.id}')">${on?'✓':'+'}</button></li>`; });
     h+=`</ul></details></div>`;
   }
   h+=`<div class="foot">Estimations : consommation calculée selon la vitesse de chaque tronçon (sans dénivelé), temps de charge selon une courbe type Model 3 LFP. Péage : km payants × tarif moyen réglable (≈ 0,11 €/km sur le réseau ASF en 2026), à ±15 % près ; tarifs réels sur vinci-autoroutes.com. Bornes : liste officielle nationale IRVE${state.src&&state.src.osm?' + OpenStreetMap':' (OpenStreetMap indisponible pour ce calcul)'} ; certaines peuvent manquer ou être mal renseignées, et l'occupation en temps réel n'est pas connue — vérifie dans l'app Tesla avant de partir.${state.noToll?' <b>Sans péage :</b> active aussi « Éviter les péages » dans Google Maps / Waze, le lien ne transmet pas ce réglage.':''}</div>`;
