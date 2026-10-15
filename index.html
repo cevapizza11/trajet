@@ -70,6 +70,9 @@ header .sub{font-size:11px;color:var(--mut);letter-spacing:.08em;text-transform:
 label{display:block;font-size:12px;color:var(--mut);margin:0 0 6px;font-weight:500}
 .field{position:relative;margin-bottom:12px}
 .row{display:flex;gap:8px;align-items:center}
+.inwrap{position:relative;flex:1;min-width:0}.inwrap input{padding-right:40px}
+.clr{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:30px;height:30px;border:0;border-radius:50%;background:var(--card3);color:var(--txt);font-size:15px;line-height:30px;text-align:center;cursor:pointer;display:none;padding:0}
+.inwrap.has .clr{display:block}
 input[type=text],input[type=time],select{width:100%;background:var(--card2);color:var(--txt);border:1px solid var(--line);border-radius:11px;padding:12px 14px;font:inherit;font-size:16px;outline:none;transition:border-color .15s,background .15s;-webkit-appearance:none;appearance:none}
 select{background-image:linear-gradient(45deg,transparent 50%,var(--mut) 50%),linear-gradient(135deg,var(--mut) 50%,transparent 50%);background-position:calc(100% - 18px) 55%,calc(100% - 13px) 55%;background-size:5px 5px;background-repeat:no-repeat;padding-right:34px}
 input[type=time]{color-scheme:dark}
@@ -205,7 +208,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.15/10/2026 08:57</div>
+  <div class="ver">v.15/10/2026 09:23</div>
 </header>
 
 <div class="layout">
@@ -512,8 +515,20 @@ function bindFavs(key,inp,list){
     state[key]={label:f.name,lat:f.place.lat,lon:f.place.lon}; inp.value=f.name; list.style.display='none';
   });
 }
+/* bouton ✕ dans un champ : efface tout en un geste (et propose les lieux favoris) */
+function addClear(inp,onClear){
+  if(!inp||inp.parentNode.classList.contains('inwrap')) return;
+  const w=document.createElement('div'); w.className='inwrap'; inp.parentNode.insertBefore(w,inp); w.appendChild(inp);
+  const b=document.createElement('button'); b.type='button'; b.className='clr'; b.title='Effacer'; b.setAttribute('aria-label','Effacer'); b.textContent='✕'; w.appendChild(b);
+  const upd=()=>w.classList.toggle('has',!!inp.value); inp.addEventListener('input',upd); upd();
+  const desc=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value'); // garde le ✕ à jour quand l'app remplit le champ elle-même
+  Object.defineProperty(inp,'value',{get(){return desc.get.call(this);},set(v){desc.set.call(this,v);upd();},configurable:true});
+  b.addEventListener('pointerdown',e=>e.preventDefault()); // ne pas perdre le focus
+  b.addEventListener('click',()=>{ inp.value=''; if(onClear) onClear(); inp.focus(); inp.dispatchEvent(new Event('input')); });
+}
 function setupAuto(key){
   const inp=$('#'+key), list=$('#'+key+'-s'); let timer=null, seq=0;
+  addClear(inp,()=>{ state[key]=null; });
   const showFavs=()=>{ const fp=favPlaces(''); if(!fp.length) return; list.innerHTML=favHtml(fp); list.style.display='block'; bindFavs(key,inp,list); };
   inp.addEventListener('focus',()=>{ if(inp.value.trim().length<3) showFavs(); });
   inp.addEventListener('input',()=>{
