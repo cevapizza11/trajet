@@ -205,7 +205,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.13/10/2026 11:14</div>
+  <div class="ver">v.15/10/2026 08:57</div>
 </header>
 
 <div class="layout">
@@ -1171,6 +1171,26 @@ $('#navbar').addEventListener('pointerdown',e=>{
   if(e.target.closest('.navtog,.navrow')){ e.preventDefault(); toggleNav(); return; }
   if(e.target.closest('[data-act="recalc"]')){ e.preventDefault(); recalcHere(); }
 });
+/* ---- Envoyer un lieu à la Tesla : menu Partager de l'iPhone -> app Tesla -> navigation de la voiture ---- */
+function teslaShare(name,addr,lat,lon){
+  const url=`https://www.google.com/maps/search/?api=1&query=${lat},${lon}`;
+  const text=addr&&addr!==name?`${name}, ${addr}`:name;
+  const fallback=()=>{ const t=text+'\n'+url; (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(
+      ()=>setStatus('Adresse copiée. Sur iPhone : ouvre l\'app Tesla → Navigation → colle l\'adresse.'),
+      ()=>{ prompt('Copie cette adresse et colle-la dans l\'app Tesla (Navigation) :',t); }); };
+  if(navigator.share){ navigator.share({title:name,text,url}).then(()=>setStatus('Envoyé : choisis l\'app Tesla dans le menu Partager pour que la voiture le reçoive.')).catch(e=>{ if(e&&e.name==='AbortError') return; fallback(); }); }
+  else fallback();
+}
+function sendTeslaStop(id){ const c=state.stops.find(x=>x.id===id)||state.chargers.find(x=>x.id===id); if(c) teslaShare(c.name,c.addr||c.city||'',c.lat,c.lon); }
+function sendTeslaDest(){ if(state.to) teslaShare(shortName(state.to.label),state.to.label,state.to.lat,state.to.lon); }
+window.sendTeslaStop=sendTeslaStop; window.sendTeslaDest=sendTeslaDest;
+let navTeslaTarget=null; // prochain arrêt prévu (ou destination) pour le bouton du bandeau GPS
+// le partage doit partir d'un vrai « appui terminé » (pointerup) pour être autorisé par l'iPhone
+$('#navbar').addEventListener('pointerup',e=>{
+  if(!e.target.closest('[data-act="tesla"]')) return; e.preventDefault();
+  const c=navTeslaTarget; if(!c){ sendTeslaDest(); return; }
+  teslaShare(c.name,c.addr||c.city||'',c.lat,c.lon);
+});
 function toggleNav(){ navCollapsed=!navCollapsed; try{ localStorage.setItem('navMini',navCollapsed?'1':'0'); }catch(e){} if(lastPos) updateNav(lastPos); else $('#navbar').classList.toggle('mini',navCollapsed); }
 window.toggleNav=toggleNav;
 function updateNav(ll){
@@ -1190,7 +1210,8 @@ function updateNav(ll){
   else if(!next) t+='<br><i class="ic ic-bolt"></i> Plus de borne rapide d\'ici l\'arrivée';
   if(stop){ const st=state.sim.steps.find(s=>s.stop===stop); t+=`<br><span class="dot" style="background:var(--stop)"></span> Arrêt prévu : ${esc(stop.name)} dans ${Math.round(stop.km-km)} km · ≈ ${at((T[stop.idx]-T[i])+chargeAhead(stop.km))} · arrivée avec <b class="pct ${pctClass(socAt(stop),settings().resCh)}">${Math.round(socAt(stop))} %</b>${st?' · recharge ≈ '+fmtDur(st.mins):''}`; }
   t+=`<br><span style="font-size:12px;color:var(--mut)"><i class="ic ic-compass"></i> ${curSpeed!=null?Math.round(curSpeed*3.6)+' km/h':'vitesse ?'} · cap ${Math.round(heading)}°${headingUp&&(curSpeed==null||curSpeed<2.5)?' · carte figée tant que tu ne roules pas':''}</span>`;
-  t+=`<div style="margin-top:6px"><button class="btn2" data-act="recalc"><i class="ic ic-refresh"></i>Recalculer depuis ici</button></div>`;
+  navTeslaTarget=stop||null;
+  t+=`<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap"><button class="btn2" data-act="tesla">🚗 ${stop?'Envoyer le prochain arrêt':'Envoyer la destination'} à la Tesla</button><button class="btn2" data-act="recalc"><i class="ic ic-refresh"></i>Recalculer depuis ici</button></div>`;
   const nPct=stop?socAt(stop):state.sim.arrive, nRes=stop?settings().resCh:settings().resDest;
   const mini=`<i class="ic ic-flag"></i> <b>${at(toDest)}</b> · ${Math.round(tot-km)} km · <i class="ic ic-battery"></i> ${Math.round(soc)} % → ${stop?'<span class="dot" style="background:var(--stop)"></span>':'<i class="ic ic-flag"></i>'} <b class="pct ${pctClass(nPct,nRes)}">${Math.round(nPct)} %</b>${next&&next!==stop?` · <i class="ic ic-bolt"></i> ${Math.round(next.km-km)} km`:''}`;
   setNav(t,mini);
@@ -1541,10 +1562,11 @@ function renderResults(){
       <div class="s"><i class="ic ic-clock"></i> Arrivée <b>${clock(tArr)}</b> avec <span class="pct ${pctClass(st.arrive,s.resCh)}">${Math.round(st.arrive)} %</span> → charger à <span class="pct ok">${Math.round(st.target)} %</span> · ≈ ${fmtDur(st.mins)} → reprise de la route <b>${clock(tt)}</b></div>
       ${(()=>{ const k=stopCost(st,tArr); return `<div class="s">💶 ≈ <b>${euros(k.eur)}</b> (${Math.round(k.kwh)} kWh à ${k.p.toFixed(2).replace('.',',')} €${c.op==='tesla'?(k.hc?' · heures creuses':' · heures pleines'):''})</div>`; })()}
       <div class="tgt"><span>Repartir avec</span><button onclick="adjTarget('${c.id}',-5)" aria-label="moins">−</button><b class="pct ok">${Math.round(st.target)} %</b><button onclick="adjTarget('${c.id}',5)" aria-label="plus">+</button>${st.manual?`<button class="auto" onclick="adjTarget('${c.id}',0)">auto</button><span class="manu">réglé par toi</span>`:'<span class="manu">calcul auto</span>'}${st.mins>settings().maxMin+0.5?`<span class="manu" style="color:var(--warn)">> ${settings().maxMin} min</span>`:''}</div>
-      <div class="acts"><a class="btn2" target="_blank" rel="noopener" href="https://waze.com/ul?ll=${c.lat},${c.lon}&navigate=yes">Waze</a><button class="btn2" onclick="toggleStop('${c.id}')">✕ Retirer</button></div></li>`;
+      <div class="acts"><button class="btn2" onclick="sendTeslaStop('${c.id}')">🚗 Envoyer à la Tesla</button><a class="btn2" target="_blank" rel="noopener" href="https://waze.com/ul?ll=${c.lat},${c.lon}&navigate=yes">Waze</a><button class="btn2" onclick="toggleStop('${c.id}')">✕ Retirer</button></div></li>`;
     }
   });
-  h+=`<li><div class="ico" style="background:var(--acc);color:#fff">B</div><div class="t">${esc(state.to.label)}</div><div class="s"><i class="ic ic-flag"></i> Arrivée <b>${clock(tt)}</b> avec <span class="pct ${pctClass(sim.arrive,s.resDest)}">${Math.round(sim.arrive)} %</span></div></li></ul>
+  h+=`<li><div class="ico" style="background:var(--acc);color:#fff">B</div><div class="t">${esc(state.to.label)}</div><div class="s"><i class="ic ic-flag"></i> Arrivée <b>${clock(tt)}</b> avec <span class="pct ${pctClass(sim.arrive,s.resDest)}">${Math.round(sim.arrive)} %</span></div><div class="acts"><button class="btn2" onclick="sendTeslaDest()">🚗 Envoyer la destination à la Tesla</button></div></li></ul>
+  ${state.stops.length?'<div class="foot" style="margin-top:6px">🚗 Conseil : envoie à la Tesla <b>un arrêt à la fois</b> (le 1er arrêt recharge, puis le suivant une fois rechargé). Si tu envoies directement la destination, la voiture calcule ses propres arrêts, uniquement des Superchargers.</div>':''}
   <div class="acts" style="margin-top:10px"><a class="btn2" target="_blank" rel="noopener" href="${gmapsUrl()}"><i class="ic ic-map"></i>Google Maps</a><button class="btn2" onclick="shareRecap()"><i class="ic ic-share"></i>Partager le récap</button><button class="btn2" onclick="arrived()"><i class="ic ic-flag"></i>Je suis arrivé</button>${state.chargers.length?'<button class="btn2" onclick="replan()"><i class="ic ic-refresh"></i>Arrêts automatiques</button>':''}<button class="btn2" onclick="resim()"><i class="ic ic-battery"></i>Recalculer batterie</button></div></div>`;
 
   h+=`<div class="card"><details><summary>${'<i class="ic ic-share"></i>'}Récap à partager</summary>
