@@ -131,6 +131,13 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border:0;border-radiu
 .tl .leg::after{content:none}
 .tl .t{font-weight:700;font-size:15px}
 .tl .s{font-size:13px;color:var(--mut);margin-top:2px}
+.tl li[data-ord]{padding-right:42px}
+.tl .drag{position:absolute;right:-4px;top:4px;width:40px;height:40px;display:grid;place-items:center;color:var(--mut);font-size:20px;line-height:1;touch-action:none;cursor:grab;border-radius:10px;user-select:none;-webkit-user-select:none}
+.tl .drag:active{cursor:grabbing;background:var(--card3)}
+.tl.sorting .leg{display:none}
+.tl li.dragging{background:var(--card2);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.45);z-index:5}
+.tl li.dragging::before{display:none}
+.tl li.insAbove{box-shadow:inset 0 3px 0 var(--acc)}.tl li.insBelow{box-shadow:inset 0 -3px 0 var(--acc)}
 .pct{font-weight:800}
 .pct.ok{color:var(--ok)}.pct.warn{color:var(--warn)}.pct.bad{color:var(--bad)}
 .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
@@ -208,7 +215,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.15/10/2026 09:23</div>
+  <div class="ver">v.15/10/2026 09:59</div>
 </header>
 
 <div class="layout">
@@ -1048,6 +1055,65 @@ async function replan(){
   const p=autoPlan(state.prof,state.chargers,settings()); state.stops=p.stops; state.planNotes=p.notes||[]; state.planError=p.error||null;
   busy=true; try{ await finalize(); }catch(e){ setStatus(e.message,true); } busy=false;
 }
+/* ---- glisser-déposer : changer l'ordre des points (étapes, bornes, destination) ---- */
+function setupSort(ul){
+  ul.querySelectorAll('.drag').forEach(h=>h.addEventListener('pointerdown',e=>{
+    if(busy) return; e.preventDefault();
+    const li=h.closest('li'), items=[...ul.querySelectorAll('li[data-ord]')], from=items.indexOf(li);
+    // on ne déplace pas l'élément dans la page pendant le geste (sinon l'iPhone « perd » le doigt) : il suit le doigt, une ligne bleue montre où il ira
+    const centers=items.map(x=>{ const r=x.getBoundingClientRect(); return r.top+window.scrollY+r.height/2; });
+    const y0=e.pageY; let to=from;
+    ul.classList.add('sorting'); li.classList.add('dragging');
+    const mark=()=>{ items.forEach(x=>x.classList.remove('insAbove','insBelow')); if(to===from) return;
+      if(to>from) items[to].classList.add('insBelow'); else items[to].classList.add('insAbove'); };
+    const move=ev=>{ ev.preventDefault();
+      const dy=ev.pageY-y0; li.style.transform=`translateY(${dy}px)`;
+      const c=ev.pageY; to=from; // position du doigt
+      for(let k=0;k<items.length;k++){ if(k===from) continue; if(k<from&&c<centers[k]) { to=Math.min(to,k); } if(k>from&&c>centers[k]) to=Math.max(to,k); }
+      mark();
+      if(ev.clientY<70) window.scrollBy(0,-14); else if(ev.clientY>innerHeight-70) window.scrollBy(0,14);
+    };
+    const up=()=>{ document.removeEventListener('pointermove',move); document.removeEventListener('pointerup',up); document.removeEventListener('pointercancel',up);
+      ul.classList.remove('sorting'); li.classList.remove('dragging'); li.style.transform=''; items.forEach(x=>x.classList.remove('insAbove','insBelow'));
+      if(to===from) return;
+      const order=items.map(x=>+x.dataset.ord); const [m]=order.splice(from,1); order.splice(to,0,m);
+      applyOrder(order.map(k=>state.ordItems[k]));
+    };
+    document.addEventListener('pointermove',move,{passive:false}); document.addEventListener('pointerup',up); document.addEventListener('pointercancel',up);
+  }));
+}
+// nouvel ordre : le dernier point devient la destination ; les étapes restent des étapes, les bornes restent des arrêts recharge
+async function applyOrder(items){
+  if(busy||!items.length) return; busy=true;
+  try{
+    setStatus('Nouvel ordre : recalcul du trajet…');
+    const lbl=o=>o.kind==='stop'?o.obj.name+((o.obj.addr||o.obj.city)?' — '+(o.obj.addr||o.obj.city):''):(o.obj.label||o.obj.name);
+    const last=items[items.length-1], mid=items.slice(0,-1);
+    if(last.kind==='stop') delete last.obj.userTarget;
+    state.to={label:lbl(last),lat:last.obj.lat,lon:last.obj.lon}; $('#to').value=state.to.label;
+    state.viaIds.slice().forEach(id=>{ const el=$('#'+id); if(el) el.closest('.field').remove(); delete state[id]; }); state.viaIds=[];
+    const points=[], stops=[];
+    for(const it of mid){
+      if(it.kind==='stop'){ points.push(it.obj); stops.push(it.obj); continue; }
+      const p={label:lbl(it),lat:it.obj.lat,lon:it.obj.lon};
+      addVia(); const id=state.viaIds[state.viaIds.length-1]; state[id]=p; $('#'+id).value=p.label;
+      points.push({...p,type:'via',id:'v-'+id,name:p.label.split(',')[0]});
+    }
+    document.activeElement&&document.activeElement.blur(); document.querySelectorAll('.sugg').forEach(l=>l.style.display='none');
+    state.vias=points.filter(p=>p.type==='via'); state.stops=stops;
+    state.base=await osrm([state.from,...points,state.to],state.noToll);
+    await fetchElev(state.base);
+    state.prof=buildProfile(state.base);
+    points.forEach(p=>project(p,state.prof));
+    state.chargers.forEach(c=>project(c,state.prof)); state.chargers.sort((a,b)=>a.km-b.km);
+    drawRoute(state.base,true);
+    state.points=points; state.route=state.base;
+    state.sim=simulate(state.route,state.points,settings()); state.rprof=buildProfile(state.route);
+    drawAll(); renderResults(); setStatus('Ordre modifié : '+[...mid.map(lbl),lbl(last)].map(shortName).join(' → '));
+  }catch(e){ console.error(e); setStatus(e.message||'Erreur',true); renderResults(); }
+  busy=false;
+}
+window.applyOrder=applyOrder;
 async function resim(){ if(!state.route) return; state.sim=simulate(state.route,state.points,settings()); renderResults(); }
 function switchToll(){ if(busy) return; $('#noToll').checked=!$('#noToll').checked; saveSettings(); $('#go').click(); }
 window.toggleStop=toggleStop; window.replan=replan; window.resim=resim; window.switchToll=switchToll;
@@ -1540,6 +1606,7 @@ function gmapsUrl(){
   if(state.points.length) u+='&waypoints='+encodeURIComponent(state.points.map(ll).join('|'));
   return u;
 }
+const DRAG='<span class="drag" title="Glisser pour changer l’ordre">⠿</span>';
 function renderResults(){
   const s=settings(), sim=state.sim, el=$('#results'); el.classList.remove('hide');
   const total=sim.driveMin+sim.chargeMin;
@@ -1562,15 +1629,16 @@ function renderResults(){
   if(!state.chargers.length&&!state.planError) h+=`<div class="alert info">Aucune borne Tesla/Powerdot/Electra trouvée à moins de ${$('#radius').value} km de la route. Élargis l'écart dans les réglages.</div>`;
   h+=`<ul class="tl"><li><div class="ico" style="background:var(--ok);color:#fff">A</div><div class="t">${esc(state.from.label)}</div><div class="s">Départ à <b>${clock(0)}</b> avec <span class="pct ok">${s.soc} %</span></div></li>`;
   let tt=0; // minutes écoulées depuis le départ
+  state.ordItems=[]; const ordLi=(kind,obj)=>{ state.ordItems.push({kind,obj}); return `<li data-ord="${state.ordItems.length-1}">${DRAG}`; };
   sim.steps.forEach((st,i)=>{
     tt+=st.legMin; const tArr=tt; if(st.stop) tt+=st.mins;
     h+=`<li class="leg">${Math.round(st.legKm)} km · ${fmtDur(st.legMin)} · −${Math.round(st.used)} %</li>`;
     if(st.via){
-      h+=`<li><div class="ico" style="background:#9b6bff;color:#fff">E</div><div class="t">${esc(st.via.name)}</div><div class="s">Étape · <b>${clock(tArr)}</b> · arrivée avec <span class="pct ${pctClass(st.arrive,s.resCh)}">${Math.round(st.arrive)} %</span></div></li>`;
+      h+=`${ordLi('via',st.via)}<div class="ico" style="background:#9b6bff;color:#fff">E</div><div class="t">${esc(st.via.name)}</div><div class="s">Étape · <b>${clock(tArr)}</b> · arrivée avec <span class="pct ${pctClass(st.arrive,s.resCh)}">${Math.round(st.arrive)} %</span></div></li>`;
     }
     if(st.stop){
       const c=st.stop;
-      h+=`<li><div class="ico" style="background:var(--stop)">${st.no}</div>
+      h+=`${ordLi('stop',c)}<div class="ico" style="background:var(--stop)">${st.no}</div>
       <div class="t">${esc(c.name)}</div>
       <div class="s">${opInfo(c.op).name} · ${kwBadge(c)}${c.known&&c.kw<100?' <span style="color:var(--warn)">charge plus lente</span>':''} · ${c.off<1?Math.round(c.off*1000)+' m':c.off.toFixed(1)+' km'} de la route</div>
       ${addrHtml(c)}
@@ -1580,7 +1648,7 @@ function renderResults(){
       <div class="acts"><button class="btn2" onclick="sendTeslaStop('${c.id}')">🚗 Envoyer à la Tesla</button><a class="btn2" target="_blank" rel="noopener" href="https://waze.com/ul?ll=${c.lat},${c.lon}&navigate=yes">Waze</a><button class="btn2" onclick="toggleStop('${c.id}')">✕ Retirer</button></div></li>`;
     }
   });
-  h+=`<li><div class="ico" style="background:var(--acc);color:#fff">B</div><div class="t">${esc(state.to.label)}</div><div class="s"><i class="ic ic-flag"></i> Arrivée <b>${clock(tt)}</b> avec <span class="pct ${pctClass(sim.arrive,s.resDest)}">${Math.round(sim.arrive)} %</span></div><div class="acts"><button class="btn2" onclick="sendTeslaDest()">🚗 Envoyer la destination à la Tesla</button></div></li></ul>
+  h+=`${ordLi('dest',state.to)}<div class="ico" style="background:var(--acc);color:#fff">B</div><div class="t">${esc(state.to.label)}</div><div class="s"><i class="ic ic-flag"></i> Arrivée <b>${clock(tt)}</b> avec <span class="pct ${pctClass(sim.arrive,s.resDest)}">${Math.round(sim.arrive)} %</span></div><div class="acts"><button class="btn2" onclick="sendTeslaDest()">🚗 Envoyer la destination à la Tesla</button></div></li></ul>
   ${state.stops.length?'<div class="foot" style="margin-top:6px">🚗 Conseil : envoie à la Tesla <b>un arrêt à la fois</b> (le 1er arrêt recharge, puis le suivant une fois rechargé). Si tu envoies directement la destination, la voiture calcule ses propres arrêts, uniquement des Superchargers.</div>':''}
   <div class="acts" style="margin-top:10px"><a class="btn2" target="_blank" rel="noopener" href="${gmapsUrl()}"><i class="ic ic-map"></i>Google Maps</a><button class="btn2" onclick="shareRecap()"><i class="ic ic-share"></i>Partager le récap</button><button class="btn2" onclick="arrived()"><i class="ic ic-flag"></i>Je suis arrivé</button>${state.chargers.length?'<button class="btn2" onclick="replan()"><i class="ic ic-refresh"></i>Arrêts automatiques</button>':''}<button class="btn2" onclick="resim()"><i class="ic ic-battery"></i>Recalculer batterie</button></div></div>`;
 
@@ -1598,6 +1666,8 @@ function renderResults(){
   }
   h+=`<div class="foot">Estimations : consommation calculée selon la vitesse de chaque tronçon (sans dénivelé), temps de charge selon une courbe type Model 3 LFP. Péage : km payants × tarif moyen réglable (≈ 0,11 €/km sur le réseau ASF en 2026), à ±15 % près ; tarifs réels sur vinci-autoroutes.com. Bornes : liste officielle nationale IRVE${state.src&&state.src.osm?' + OpenStreetMap':' (OpenStreetMap indisponible pour ce calcul)'} ; certaines peuvent manquer ou être mal renseignées, et l'occupation en temps réel n'est pas connue — vérifie dans l'app Tesla avant de partir.${state.noToll?' <b>Sans péage :</b> active aussi « Éviter les péages » dans Google Maps / Waze, le lien ne transmet pas ce réglage.':''}</div>`;
   el.innerHTML=h;
+  const tl=el.querySelector('.tl');
+  if(tl&&state.ordItems.length>1){ setupSort(tl); tl.insertAdjacentHTML('beforebegin','<div class="foot" style="margin-top:10px">⠿ Maintiens et glisse la poignée à droite d’un point pour changer l’ordre (bornes, étapes, destination). Le dernier point devient la destination.</div>'); }
 }
 </script>
 </body>
