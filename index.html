@@ -131,6 +131,14 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border:0;border-radiu
 .tl .leg::after{content:none}
 .tl .t{font-weight:700;font-size:15px}
 .tl .s{font-size:13px;color:var(--mut);margin-top:2px}
+.foodSlot{display:block;margin-top:5px}
+.foodBtn{border:1px solid var(--line2);background:var(--card2);color:var(--txt);border-radius:999px;padding:5px 11px;font:inherit;font-size:12.5px;cursor:pointer}
+.foodBtn:hover{background:var(--card3)}.foodInfo{font-size:12.5px;color:var(--mut)}
+.foodList{position:relative;z-index:2;list-style:none;margin:6px 0 2px;padding:6px 8px;background:var(--card2);border:1px solid var(--line);border-radius:10px;max-height:260px;overflow:auto;text-align:left}
+.tl .foodList li{padding:6px 2px}.tl .foodList li::before{content:none}
+.foodList li{padding:6px 2px;border-bottom:1px solid var(--line);font-size:13px;line-height:1.35}.foodList li:last-child{border-bottom:0}
+.foodList li b{display:block;color:var(--txt)}.foodList li span{display:block;color:var(--mut);font-size:12px}.foodList li a{font-size:12px;color:var(--acc2)}
+.foodList li.src,.foodList li.more{color:var(--mut);font-size:11.5px}
 .tl li[data-ord]{padding-right:42px}
 .tl .drag{position:absolute;right:-4px;top:4px;width:40px;height:40px;display:grid;place-items:center;color:var(--mut);font-size:20px;line-height:1;touch-action:none;cursor:grab;border-radius:10px;user-select:none;-webkit-user-select:none}
 .tl .drag:active{cursor:grabbing;background:var(--card3)}
@@ -215,7 +223,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.15/10/2026 09:59</div>
+  <div class="ver">v.23/10/2026 13:40</div>
 </header>
 
 <div class="layout">
@@ -1002,6 +1010,7 @@ $('#go').onclick=async()=>{
     }
     await finalize();
     setStatus('');
+    fetchFoodFor(state.chargers.filter(c=>!c.slow)); // restos autour des bornes, en arrière-plan
   }catch(e){ console.error(e); setStatus(e.message||'Erreur',true); }
   busy=false; $('#go').disabled=false;
 };
@@ -1156,7 +1165,8 @@ function nearestIdx(prof,lat,lon){
   return {i:bi, off:Math.sqrt(best)*111.32};
 }
 
-function addrHtml(c,br){
+function addrHtml(c,br){ return addrOnly(c,br)+(br?'<br>':'')+foodHtml(c); }
+function addrOnly(c,br){
   const a=c.addr||c.city; if(!a) return '';
   const link=`https://waze.com/ul?ll=${c.lat},${c.lon}&navigate=yes`;
   return (br?'<br>':'<span class="addr">')+`<i class="ic ic-pin"></i> ${esc(a)} · <a href="${link}" target="_blank" rel="noopener">Waze</a>`+(br?'':'</span>');
@@ -1299,6 +1309,51 @@ function updateNav(ll){
 }
 
 
+/* ================== RESTAURANTS AUTOUR DES BORNES (OpenStreetMap) ==================
+   Pour chaque borne : restaurants, fast-foods et cafés à moins de 500 m, pour choisir où s'arrêter. */
+const FOOD_R=500, FOOD=new Map(); // clé "lat,lon" -> liste | 'loading' | 'err'
+const foodKey=c=>(+c.lat).toFixed(5)+','+(+c.lon).toFixed(5);
+const FOOD_TYPE={restaurant:'Restaurant',fast_food:'Fast-food',cafe:'Café'};
+const CUISINE={pizza:'pizza',burger:'burgers',kebab:'kebab',sandwich:'sandwichs',french:'française',italian:'italienne',asian:'asiatique',chinese:'chinoise',japanese:'japonaise',sushi:'sushis',regional:'régionale',spanish:'espagnole',tapas:'tapas',indian:'indienne',thai:'thaï',vietnamese:'vietnamienne',mexican:'mexicaine',crepe:'crêpes',coffee_shop:'café',chicken:'poulet',seafood:'fruits de mer',steak_house:'grillades',bakery:'boulangerie',ice_cream:'glaces',breakfast:'petit-déjeuner',vegetarian:'végétarienne',international:'internationale',mediterranean:'méditerranéenne',catalan:'catalane',moroccan:'marocaine',lebanese:'libanaise',greek:'grecque',portuguese:'portugaise'};
+function foodHtml(c){
+  const k=foodKey(c), f=FOOD.get(k); let inner;
+  if(f==='loading') inner='<span class="foodInfo">🍽️ recherche des restos…</span>';
+  else if(Array.isArray(f)) inner=f.length?`<button class="foodBtn" onclick="showFood('${k}',this)">🍽️ ${f.length} resto${f.length>1?'s':''} à moins de ${FOOD_R} m</button>`:`<span class="foodInfo">🍽️ aucun resto à moins de ${FOOD_R} m</span>`;
+  else inner=`<button class="foodBtn" onclick="loadFoodOne('${k}')">🍽️ ${f==='err'?'Réessayer : restos autour':'Voir les restos autour'}</button>`;
+  return `<span class="foodSlot" data-fk="${k}">${inner}</span>`;
+}
+function refreshFoodSlots(){ document.querySelectorAll('.foodSlot').forEach(el=>{ const k=el.dataset.fk, [lat,lon]=k.split(','); el.outerHTML=foodHtml({lat,lon}); }); }
+async function fetchFoodFor(list){
+  const todo=[]; const seen=new Set();
+  for(const c of list){ const k=foodKey(c); if(seen.has(k)) continue; seen.add(k); const f=FOOD.get(k); if(f===undefined||f==='err'){ todo.push({k,lat:+c.lat,lon:+c.lon}); FOOD.set(k,'loading'); } if(todo.length>=60) break; }
+  if(!todo.length) return; refreshFoodSlots();
+  for(let i=0;i<todo.length;i+=30){
+    const part=todo.slice(i,i+30);
+    const q=`[out:json][timeout:25];(${part.map(p=>`nwr["amenity"~"^(restaurant|fast_food|cafe)$"]["name"](around:${FOOD_R},${p.lat},${p.lon});`).join('')});out center tags;`;
+    try{
+      const els=await overpassAny(q,25000);
+      const pl=els.map(el=>{ const t=el.tags||{}, la=el.lat??(el.center&&el.center.lat), lo=el.lon??(el.center&&el.center.lon); return la==null?null:{name:t.name,type:t.amenity,cuisine:t.cuisine||'',hours:t.opening_hours||'',lat:la,lon:lo,id:el.type+el.id}; }).filter(Boolean);
+      part.forEach(p=>{ const near=[]; const ids=new Set(); pl.forEach(r=>{ if(ids.has(r.id)) return; const d=hav([p.lon,p.lat],[r.lon,r.lat]); if(d<=FOOD_R){ ids.add(r.id); near.push({...r,d}); } }); near.sort((a,b)=>a.d-b.d); FOOD.set(p.k,near); });
+    }catch(e){ console.warn('Restos :',e.message); part.forEach(p=>FOOD.set(p.k,'err')); }
+    refreshFoodSlots();
+  }
+}
+async function overpassAny(q,ms){
+  const ctl=new AbortController(), tm=setTimeout(()=>ctl.abort(),ms);
+  try{ return await Promise.any(OVERPASS.map(async ep=>{ const r=await fetch(ep,{method:'POST',body:new URLSearchParams({data:q}),signal:ctl.signal}); if(!r.ok) throw new Error('HTTP '+r.status); const j=await r.json(); if(j.remark&&!(j.elements||[]).length&&/error|timed out|runtime/i.test(j.remark)) throw new Error(j.remark); return j.elements||[]; })); }
+  catch(e){ throw (e.errors&&e.errors[0])||e; }
+  finally{ clearTimeout(tm); ctl.abort(); }
+}
+function loadFoodOne(k){ const [lat,lon]=k.split(','); FOOD.delete(k); fetchFoodFor([{lat,lon}]); }
+function showFood(k,btn){
+  const box=btn.parentNode.querySelector('.foodList'); if(box){ box.remove(); return; }
+  const f=FOOD.get(k); if(!Array.isArray(f)) return;
+  const cu=c=>c.split(';').map(x=>CUISINE[x.trim()]||x.trim().replace(/_/g,' ')).filter(Boolean).slice(0,3).join(', ');
+  const h=f.slice(0,12).map(r=>`<li><b>${esc(r.name)}</b><span>${FOOD_TYPE[r.type]||r.type}${r.cuisine?' · '+esc(cu(r.cuisine)):''} · ${Math.round(r.d/10)*10} m à pied (≈ ${Math.max(1,Math.round(r.d/80))} min)</span>${r.hours?`<span class="fh">🕒 ${esc(r.hours.slice(0,80))}</span>`:''}<a href="https://www.google.com/maps/search/${encodeURIComponent(r.name)}/@${r.lat},${r.lon},18z" target="_blank" rel="noopener">Voir sur Google Maps</a></li>`).join('');
+  btn.insertAdjacentHTML('afterend',`<ul class="foodList">${h}${f.length>12?`<li class="more">+ ${f.length-12} autres</li>`:''}<li class="src">Source : OpenStreetMap — horaires à vérifier.</li></ul>`);
+}
+window.showFood=showFood; window.loadFoodOne=loadFoodOne;
+
 /* ================== BORNES DANS UNE VILLE ================== */
 setupAuto('city');
 function cityPopup(c){
@@ -1333,6 +1388,7 @@ async function citySearch(){
       h+='</ul></details>';
     }
     out.innerHTML=h;
+    fetchFoodFor(res.filter(c=>!c.slow).slice(0,40));
     // carte
     layers.city.clearLayers();
     const mk=[];
