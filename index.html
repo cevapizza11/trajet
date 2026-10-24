@@ -223,7 +223,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.25/10/2026 00:50</div>
+  <div class="ver">v.25/10/2026 00:52</div>
 </header>
 
 <div class="layout">
@@ -1640,6 +1640,12 @@ async function importFromUrl(){
   par.forEach(p=>{ addVia(); put(state.viaIds[state.viaIds.length-1],p); });
   const h=q.get('heure'); if(h&&/^\d{1,2}:\d{2}$/.test(h)){ $('#depTime').value=h.padStart(5,'0'); depTouched=true; }
   const nom=(q.get('nom')||'').trim();
+  // points donnés sans coordonnées : l'appli cherche l'adresse elle-même (le nom affiché est gardé)
+  const keys=['from',...state.viaIds,'to'], pts=[de,...par,a];
+  for(let i=0;i<pts.length;i++){ const p=pts[i]; if(p.lat!=null) continue;
+    setStatus('Trajet reçu — recherche de l\'adresse '+(i+1)+'/'+pts.length+'…');
+    try{ const r=await geocode(p.label); if(r&&r.length){ p.lat=r[0].lat; p.lon=r[0].lon; state[keys[i]]={...r[0],label:p.label}; } }catch(e){}
+  }
   if(nom&&de.lat!=null&&a.lat!=null&&par.every(p=>p.lat!=null)){
     const P=p=>({label:p.label,lat:p.lat,lon:p.lon});
     perso.favs=perso.favs.filter(f=>f.place||f.name!==nom); perso.favs.push({name:nom,from:P(de),to:P(a),vias:par.map(P)});
