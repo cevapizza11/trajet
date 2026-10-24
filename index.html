@@ -223,7 +223,7 @@ body.navmode{overflow:hidden}
 <body>
 <header>
   <div class="brand"><div class="logo"><i class="ic ic-bolt"></i></div><div><h1>Trajet</h1><div class="sub">Model 3 · Propulsion</div></div></div>
-  <div class="ver">v.23/10/2026 13:40</div>
+  <div class="ver">v.25/10/2026 00:50</div>
 </header>
 
 <div class="layout">
@@ -1622,7 +1622,32 @@ window.recalcHere=recalcHere;
 $('#syncCode').value=syncCode();
 $('#syncCode').addEventListener('change',()=>{ const c=$('#syncCode').value.trim(); if(c.length<16){ alert('Le code doit faire au moins 16 caractères.'); $('#syncCode').value=syncCode(); return; } try{ localStorage.setItem('syncCode',c); }catch(e){} loadPerso(); });
 $('#syncCopy').onclick=async()=>{ try{ await navigator.clipboard.writeText(syncCode()); setStatus('Code copié : colle-le dans les réglages de tes autres appareils'); }catch(e){ $('#syncCode').select(); } };
-setTimeout(loadPerso,0);
+setTimeout(async()=>{ await loadPerso(); importFromUrl(); },0);
+
+/* ---- Trajet reçu par lien (ex. envoyé par l'assistant de Thomas) ----
+   Format : ?nom=Audits 27/10&heure=07:30&de=Narbonne@43.184,3.004&par=BK Béziers@43.34,3.21|BK Agde@43.31,3.47&a=Narbonne@43.184,3.004
+   Chaque point : « nom » seul (adresse cherchée) ou « nom@latitude,longitude ». Les étapes sont séparées par « | ».
+   Le trajet est enregistré dans les favoris (donc synchronisé sur la Tesla) puis calculé. */
+async function importFromUrl(){
+  let q; try{ q=new URLSearchParams(location.search); }catch(e){ return; }
+  if(!q.get('de')||!q.get('a')) return;
+  const parse=s=>{ s=(s||'').trim(); const m=s.match(/^(.*)@\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/); return m?{label:m[1].trim(),lat:+m[2],lon:+m[3]}:{label:s}; };
+  const de=parse(q.get('de')), a=parse(q.get('a')), par=(q.get('par')||'').split('|').map(x=>x.trim()).filter(Boolean).map(parse);
+  try{ history.replaceState(null,'',location.pathname); }catch(e){}
+  state.viaIds.slice().forEach(id=>{ const el=$('#'+id); if(el) el.closest('.field').remove(); delete state[id]; }); state.viaIds=[];
+  const put=(key,p)=>{ $('#'+key).value=p.label; state[key]=p.lat!=null?{...p}:null; };
+  put('from',de); put('to',a);
+  par.forEach(p=>{ addVia(); put(state.viaIds[state.viaIds.length-1],p); });
+  const h=q.get('heure'); if(h&&/^\d{1,2}:\d{2}$/.test(h)){ $('#depTime').value=h.padStart(5,'0'); depTouched=true; }
+  const nom=(q.get('nom')||'').trim();
+  if(nom&&de.lat!=null&&a.lat!=null&&par.every(p=>p.lat!=null)){
+    const P=p=>({label:p.label,lat:p.lat,lon:p.lon});
+    perso.favs=perso.favs.filter(f=>f.place||f.name!==nom); perso.favs.push({name:nom,from:P(de),to:P(a),vias:par.map(P)});
+    renderFavs(); $('#favSel').value=String(perso.favs.length-1); await savePerso();
+  }
+  setStatus('Trajet reçu'+(nom?' : « '+nom+' » (enregistré dans tes favoris)':'')+' — calcul en cours…');
+  setTimeout(()=>$('#go').click(),400);
+}
 
 /* ================== APP INSTALLABLE (hors connexion : l'app s'ouvre même sans réseau) ================== */
 if('serviceWorker' in navigator&&location.protocol==='https:') window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(e=>console.warn('SW :',e.message)));
